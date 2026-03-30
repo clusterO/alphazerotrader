@@ -1,0 +1,34 @@
+#### TRADING SETTINGS
+SYMBOL = 'BTC/USDT'
+TIMEFRAME = '1h'
+WINDOW_SIZE = 50
+INITIAL_BALANCE = 1000
+EPISODE_LENGTH = 200
+
+#### SELF PLAY
+EPISODES = 2
+MCTS_SIMS = 5
+MEMORY_SIZE = 500
+TURNS_UNTIL_TAU0 = 5
+CPUCT = 1
+EPSILON = 0.2
+ALPHA = 0.8
+
+
+#### RETRAINING
+BATCH_SIZE = 256
+EPOCHS = 1
+REG_CONST = 0.0001
+LEARNING_RATE = 0.01 # Lowered for stability
+MOMENTUM = 0.9
+TRAINING_LOOPS = 10
+
+HIDDEN_CNN_LAYERS = [
+	{'filters':64, 'kernel_size': (3,3)}
+	 , {'filters':64, 'kernel_size': (3,3)}
+	 , {'filters':64, 'kernel_size': (3,3)}
+	]
+
+#### EVALUATION
+EVAL_EPISODES = 20
+SCORING_THRESHOLD = 1.3
