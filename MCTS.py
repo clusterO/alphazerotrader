@@ -43,6 +43,9 @@ class MCTS():
 		self.tree = {}
 		self.cpuct = cpuct
 		self.addNode(root)
+		import yaml
+		with open("config.yaml", 'r') as f:
+			self.cfg = yaml.safe_load(f)
 	
 	def __len__(self):
 		return len(self.tree)
@@ -64,8 +67,8 @@ class MCTS():
 			maxQU = -99999
 
 			if currentNode == self.root:
-				epsilon = config.EPSILON
-				nu = np.random.dirichlet([config.ALPHA] * len(currentNode.edges))
+				epsilon = self.cfg['rl']['epsilon']
+				nu = np.random.dirichlet([self.cfg['rl']['alpha']] * len(currentNode.edges))
 			else:
 				epsilon = 0
 				nu = [0] * len(currentNode.edges)

@@ -44,6 +44,9 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
     points = {player1.name:[], player2.name:[]}
 
     for e in range(EPISODES):
+        
+        # Initialize episode rewards
+        ep_rewards = {player1.name: 0.0, player2.name: 0.0}
 
         logger.info('====================')
         logger.info('EPISODE %d OF %d', e+1, EPISODES)
@@ -99,25 +102,33 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
             logger.info('====================')
 
             ### Do the action
-            state, value, done, _ = env.step(action) #the value of the newState from the POV of the new playerTurn i.e. -1 if the previous player played a winning move
+            state, reward, done, _ = env.step(action) 
+            
+            ep_rewards[players[state.playerTurn]['agent'].name] += reward
             
             env.gameState.render(logger)
 
             if done == 1: 
+                # Append total episode rewards to points for Sharpe calculation
+                points[player1.name].append(ep_rewards[player1.name])
+                points[player2.name].append(ep_rewards[player2.name])
+
+                terminal_value = state.value[0] # Get terminal tanh pnl
+
                 if memory != None:
                     #### If the game is finished, assign the values correctly to the game moves
                     for move in memory.stmemory:
-                        if hasattr(config, 'SYMBOL'):
-                            move['value'] = value
+                        if hasattr(config, 'SYMBOL') or 'trading' in str(env.name):
+                            move['value'] = terminal_value
                         else:
                             if move['playerTurn'] == state.playerTurn:
-                                move['value'] = value
+                                move['value'] = terminal_value
                             else:
-                                move['value'] = -value
+                                move['value'] = -terminal_value
 
                     memory.commit_ltmemory()
 
-                if value > 0:
+                if terminal_value > 0:
                     logger.info('%s WINS!', players[state.playerTurn]['name'])
                     scores[players[state.playerTurn]['name']] = scores[players[state.playerTurn]['name']] + 1
                     if state.playerTurn == 1: 
@@ -125,15 +136,14 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
                     else:
                         sp_scores['nsp'] = sp_scores['nsp'] + 1
 
-                elif value < 0:
+                elif terminal_value < 0:
                     logger.info('%s WINS!', players[-state.playerTurn]['name'])
                     scores[players[-state.playerTurn]['name']] = scores[players[-state.playerTurn]['name']] + 1
-
+               
                     if state.playerTurn == 1: 
                         sp_scores['nsp'] = sp_scores['nsp'] + 1
                     else:
                         sp_scores['sp'] = sp_scores['sp'] + 1
-
 
                 else:
                     logger.info('DRAW...')

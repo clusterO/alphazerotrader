@@ -1,0 +1,34 @@
+trading:
+  symbol: "BTC/USDT"
+  timeframe: "1h"
+  window_size: 60
+  initial_balance: 1000
+  fee: 0.0005 # 5 bps
+  holding_penalty: 0.00001
+  episode_length_range: [150, 400]
+
+rl:
+  episodes: 30
+  mcts_sims: 50
+  memory_size: 30000
+  turns_until_tau0: 10
+  cpuct: 1.0
+  epsilon: 0.2
+  alpha: 0.8
+  batch_size: 256
+  epochs: 1
+  learning_rate: 0.001
+  momentum: 0.9
+  training_loops: 10
+
+model:
+  type: "transformer"
+  d_model: 64
+  num_heads: 4
+  num_layers: 2
+  dropout: 0.1
+
+evaluation:
+  eval_episodes: 20
+  scoring_threshold: 1.1 # 10% improvement in Sharpe
+  metric: "sharpe" # "sharpe" or "calmar"

@@ -184,16 +184,18 @@ class Agent():
 
 	def replay(self, ltmemory):
 		lg.logger_mcts.info('******RETRAINING MODEL******')
+		import yaml
+		with open("config.yaml", 'r') as f:
+			cfg = yaml.safe_load(f)
 
+		for i in range(cfg['rl']['training_loops']):
+			minibatch = random.sample(ltmemory, min(cfg['rl']['batch_size'], len(ltmemory)))
 
-		for i in range(config.TRAINING_LOOPS):
-			minibatch = random.sample(ltmemory, min(config.BATCH_SIZE, len(ltmemory)))
-
-			training_states = np.array([self.model.convertToModelInput(row['state']) for row in minibatch])
+			training_states = np.array([row['state'].binary for row in minibatch])
 			training_targets = {'value_head': np.array([row['value'] for row in minibatch])
 								, 'policy_head': np.array([row['AV'] for row in minibatch])} 
 
-			fit = self.model.fit(training_states, training_targets, epochs=config.EPOCHS, verbose=1, validation_split=0, batch_size = 32)
+			fit = self.model.fit(training_states, training_targets, epochs=cfg['rl']['epochs'], verbose=1, validation_split=0, batch_size = 32)
 			lg.logger_mcts.info('NEW LOSS %s', fit.history)
 
 			self.train_overall_loss.append(round(fit.history['loss'][config.EPOCHS - 1],4))
