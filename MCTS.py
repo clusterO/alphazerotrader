@@ -38,22 +38,15 @@ class Edge():
 
 class MCTS():
 
-	def __init__(self, root, cpuct):
+	def __init__(self, root, cpuct, cfg):
 		self.root = root
 		self.tree = {}
 		self.cpuct = cpuct
+		self.cfg = cfg
 		self.addNode(root)
-		import yaml
-		with open("config.yaml", 'r') as f:
-			self.cfg = yaml.safe_load(f)
-	
-	def __len__(self):
-		return len(self.tree)
+		self.root_nu = None # Lazy initialization
 
 	def moveToLeaf(self):
-
-		lg.logger_mcts.info('------MOVING TO LEAF------')
-
 		breadcrumbs = []
 		currentNode = self.root
 
@@ -61,14 +54,14 @@ class MCTS():
 		value = 0
 
 		while not currentNode.isLeaf():
-
-			lg.logger_mcts.info('PLAYER TURN...%d', currentNode.state.playerTurn)
-		
 			maxQU = -99999
 
 			if currentNode == self.root:
 				epsilon = self.cfg['rl']['epsilon']
-				nu = np.random.dirichlet([self.cfg['rl']['alpha']] * len(currentNode.edges))
+				# Calculate noise once when root is first expanded
+				if self.root_nu is None or len(self.root_nu) != len(self.root.edges):
+					self.root_nu = np.random.dirichlet([self.cfg['rl']['alpha']] * len(self.root.edges))
+				nu = self.root_nu
 			else:
 				epsilon = 0
 				nu = [0] * len(currentNode.edges)

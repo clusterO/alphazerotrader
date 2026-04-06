@@ -6,16 +6,25 @@ np.set_printoptions(suppress=True)
 
 import yaml
 import pandas as pd
+import random
+import os
+import config
 from shutil import copyfile
 from keras.utils import plot_model
+import pickle
+import tensorflow as tf
+from loss import softmax_cross_entropy_with_logits
+
 with open("config.yaml", 'r') as f:
     cfg = yaml.safe_load(f)
 
-# from game import Game, GameState
-import config
+# Symbol and TF for naming
+SYM = cfg['trading']['symbol'].replace('/', '_')
+TF = cfg['trading']['timeframe']
+
 if hasattr(config, 'SYMBOL') or 'trading' in cfg:
     from games.trading.game import TradingGame as Game
-    data = pd.read_csv('data/train.csv') # Using train data
+    data = pd.read_csv('data/train.csv')
     env = Game(data, cfg)
 else:
     from game import Game, GameState
@@ -23,126 +32,76 @@ else:
 
 from agent import Agent
 from memory import Memory
-from model import Residual_CNN
+from model import Residual_CNN, TransformerBlock
 from funcs import playMatches, playMatchesBetweenVersions
 
 import loggers as lg
-
 from settings import run_folder, run_archive_folder
 import initialise
-import pickle
-
-
-lg.logger_main.info('=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*')
-lg.logger_main.info('=*=*=*=*=*=.      NEW LOG      =*=*=*=*=*')
-lg.logger_main.info('=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*')
-
-# If loading an existing neural network, copy the config file to root
-if initialise.INITIAL_RUN_NUMBER != None:
-    copyfile(run_archive_folder  + env.name + '/run' + str(initialise.INITIAL_RUN_NUMBER).zfill(4) + '/config.py', './config.py')
 
 ######## LOAD MEMORIES IF NECESSARY ########
-
-if initialise.INITIAL_MEMORY_VERSION == None:
-    memory = Memory(cfg['rl']['memory_size'])
+memory_path = run_folder + f"memory/memory_{SYM}_{TF}.p"
+memory = Memory(cfg['rl']['memory_size'])
+if os.path.exists(memory_path):
+    print(f'LOADING EXISTING MEMORY FROM {memory_path}...')
+    try:
+        memory = memory.load(memory_path)
+        print(f'Successfully loaded {len(memory.ltmemory)} memories.')
+    except Exception as e:
+        print(f"Error loading memory: {e}. Starting fresh.")
 else:
-    print('LOADING MEMORY VERSION ' + str(initialise.INITIAL_MEMORY_VERSION) + '...')
-    memory = pickle.load( open( run_archive_folder + env.name + '/run' + str(initialise.INITIAL_RUN_NUMBER).zfill(4) + "/memory/memory" + str(initialise.INITIAL_MEMORY_VERSION).zfill(4) + ".p",   "rb" ) )
+    print("No existing memory found. Starting fresh.")
 
 ######## LOAD MODEL IF NECESSARY ########
-
-# create an untrained neural network objects from the config file
+# create an untrained neural network objects
 current_NN = Residual_CNN(cfg['rl']['learning_rate'], cfg['rl']['learning_rate'], env.input_shape,   env.action_size)
 best_NN = Residual_CNN(cfg['rl']['learning_rate'], cfg['rl']['learning_rate'], env.input_shape,   env.action_size)
 
-#If loading an existing neural netwrok, set the weights from that model
-if initialise.INITIAL_MODEL_VERSION != None:
-    best_player_version  = initialise.INITIAL_MODEL_VERSION
-    print('LOADING MODEL VERSION ' + str(initialise.INITIAL_MODEL_VERSION) + '...')
-    m_tmp = best_NN.read(env.name, initialise.INITIAL_RUN_NUMBER, best_player_version)
+# Version management
+best_player_version = 0
+# Check if any model already exists to resume
+model_dir = run_folder + 'models/'
+existing_models = [f for f in os.listdir(model_dir) if f.startswith(f"{SYM}_{TF}_v") and f.endswith('.keras')]
+if existing_models:
+    existing_models.sort()
+    latest_model = existing_models[-1]
+    best_player_version = int(latest_model.split('_v')[-1].split('.')[0])
+    print(f"LOADING LATEST MODEL VERSION {best_player_version} ({latest_model})...")
+    m_tmp = tf.keras.models.load_model(model_dir + latest_model, custom_objects={'softmax_cross_entropy_with_logits': softmax_cross_entropy_with_logits, 'TransformerBlock': TransformerBlock})
     current_NN.model.set_weights(m_tmp.get_weights())
     best_NN.model.set_weights(m_tmp.get_weights())
-#otherwise just ensure the weights on the two players are the same
-else:
-    best_player_version = 0
-    best_NN.model.set_weights(current_NN.model.get_weights())
-
-#copy the config file to the run folder
-copyfile('./config.py', run_folder + 'config.py')
-plot_model(current_NN.model, to_file=run_folder + 'models/model.png', show_shapes = True)
-
-print('\n')
 
 ######## CREATE THE PLAYERS ########
-
-######## CREATE THE PLAYERS ########
-
 current_player = Agent('current_player', env.state_size, env.action_size, cfg['rl']['mcts_sims'], cfg['rl']['cpuct'], current_NN)
 best_player = Agent('best_player', env.state_size, env.action_size, cfg['rl']['mcts_sims'], cfg['rl']['cpuct'], best_NN)
-#user_player = User('player1', env.state_size, env.action_size)
+
 iteration = 0
 
 while 1:
-
     iteration += 1
-    # reload(lg) # lg is not reloaded usually in this way
-    # reload(config)
-    
-    print('ITERATION NUMBER ' + str(iteration))
-    
-    lg.logger_main.info('BEST PLAYER VERSION: %d', best_player_version)
-    print('BEST PLAYER VERSION ' + str(best_player_version))
+    print(f'ITERATION NUMBER {iteration}')
+    print(f'BEST PLAYER VERSION {best_player_version}')
 
     ######## SELF PLAY ########
-    print('SELF PLAYING ' + str(cfg['rl']['episodes']) + ' EPISODES...')
+    print(f'SELF PLAYING {cfg["rl"]["episodes"]} EPISODES...')
     _, memory, _, _ = playMatches(env, best_player, best_player, cfg['rl']['episodes'], lg.logger_main, turns_until_tau0 = cfg['rl']['turns_until_tau0'], memory = memory)
-    print('\n')
-    
-    memory.clear_stmemory()
-    print(f'CURRENT MEMORY SIZE: {len(memory.ltmemory)} / {cfg["rl"]["memory_size"]}')
-    
-    if len(memory.ltmemory) >= cfg['rl']['memory_size']:
 
+    # SAVE MEMORY BACKUP
+    memory.save(memory_path)
+    print(f'CURRENT MEMORY SIZE: {len(memory.ltmemory)} / {cfg["rl"]["memory_size"]}')
+
+    if len(memory.ltmemory) >= cfg['rl']['memory_size']:
         ######## RETRAINING ########
         print('RETRAINING...')
         current_player.replay(memory.ltmemory)
-        print('')
 
-        if iteration % 5 == 0:
-            pickle.dump( memory, open( run_folder + "memory/memory" + str(iteration).zfill(4) + ".p", "wb" ) )
-
-        lg.logger_memory.info('====================')
-        lg.logger_memory.info('NEW MEMORIES')
-        lg.logger_memory.info('====================')
-        
-        memory_samp = random.sample(memory.ltmemory, min(1000, len(memory.ltmemory)))
-        
-        for s in memory_samp:
-            current_value, current_probs, _ = current_player.get_preds(s['state'])
-            best_value, best_probs, _ = best_player.get_preds(s['state'])
-
-            lg.logger_memory.info('MCTS VALUE FOR %s: %f', s['playerTurn'], s['value'])
-            lg.logger_memory.info('CUR PRED VALUE FOR %s: %f', s['playerTurn'], current_value)
-            lg.logger_memory.info('BES PRED VALUE FOR %s: %f', s['playerTurn'], best_value)
-            lg.logger_memory.info('THE MCTS ACTION VALUES: %s', ['%.2f' % elem for elem in s['AV']]  )
-            lg.logger_memory.info('CUR PRED ACTION VALUES: %s', ['%.2f' % elem for elem in  current_probs])
-            lg.logger_memory.info('BES PRED ACTION VALUES: %s', ['%.2f' % elem for elem in  best_probs])
-            lg.logger_memory.info('ID: %s', s['state'].id)
-            # lg.logger_memory.info('INPUT TO MODEL: %s', current_player.model.convertToModelInput(s['state']))
-
-            s['state'].render(lg.logger_memory)
-            
         ######## TOURNAMENT ########
-        print('TOURNAMENT...')
-        # Load validation data for tournament
+        print('TOURNAMENT (UNSEEN DATA)...')
         val_data = pd.read_csv('data/val.csv')
         val_env = Game(val_data, cfg)
-        scores, _, points, sp_scores = playMatches(val_env, best_player, current_player, cfg['evaluation']['eval_episodes'], lg.logger_tourney, turns_until_tau0 = 0, memory = None)
+        scores, _, points, _ = playMatches(val_env, best_player, current_player, cfg['evaluation']['eval_episodes'], lg.logger_tourney, turns_until_tau0 = 0, memory = None)
 
-        print('\nSCORES')
-        print(scores)
-
-        # Calculate risk-adjusted performance (Sharpe approx from points)
+        # Calculate Sharpe
         def get_sharpe(pts):
             if len(pts) < 2: return -1.0
             return np.mean(pts) / (np.std(pts) + 1e-9)
@@ -154,10 +113,12 @@ while 1:
         print(f'CURR PLAYER SHARPE: {curr_sharpe:.4f}')
 
         if curr_sharpe > best_sharpe * cfg['evaluation']['scoring_threshold']:
-            print('NEW BEST PLAYER!')
-            best_player_version = iteration
+            print('NEW BEST PLAYER PROMOTED!')
+            best_player_version += 1
             best_NN.model.set_weights(current_NN.model.get_weights())
-            best_NN.write(env.name, best_player_version)
-        else:
-            print('BEST PLAYER REMAINS VERSION ' + str(best_player_version))
 
+            model_name = f"{SYM}_{TF}_v{str(best_player_version).zfill(4)}.keras"
+            best_NN.model.save(run_folder + 'models/' + model_name)
+            print(f"Saved: {model_name}")
+        else:
+            print(f'STAYING WITH VERSION {best_player_version}')

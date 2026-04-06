@@ -1,4 +1,5 @@
 
+import logging
 from utils import setup_logger
 from settings import run_folder
 
@@ -13,7 +14,7 @@ LOGGER_DISABLED = {
 , 'model': False}
 
 
-logger_mcts = setup_logger('logger_mcts', run_folder + 'logs/logger_mcts.log')
+logger_mcts = setup_logger('logger_mcts', run_folder + 'logs/logger_mcts.log', logging.WARNING)
 logger_mcts.disabled = LOGGER_DISABLED['mcts']
 
 logger_main = setup_logger('logger_main', run_folder + 'logs/logger_main.log')

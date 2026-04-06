@@ -52,6 +52,10 @@ class Agent():
 		self.val_overall_loss = []
 		self.val_value_loss = []
 		self.val_policy_loss = []
+		
+		import yaml
+		with open("config.yaml", 'r') as f:
+			self.cfg = yaml.safe_load(f)
 
 	
 	def simulate(self):
@@ -80,10 +84,11 @@ class Agent():
 
 		#### run the simulation
 		for sim in range(self.MCTSsimulations):
-			lg.logger_mcts.info('***************************')
-			lg.logger_mcts.info('****** SIMULATION %d ******', sim + 1)
-			lg.logger_mcts.info('***************************')
+			if sim % 25 == 0:
+				print(".", end="", flush=True)
 			self.simulate()
+		
+		print("!", end="", flush=True)
 
 		#### get action values
 		pi, values = self.getAV(1)
@@ -105,11 +110,12 @@ class Agent():
 
 	def get_preds(self, state):
 		#predict the leaf
-		inputToModel = np.array([self.model.convertToModelInput(state)])
+		inputToModel = np.array([self.model.convertToModelInput(state)], dtype=np.float32)
 
-		preds = self.model.predict(inputToModel)
-		value_array = preds[0]
-		logits_array = preds[1]
+		# Use __call__ instead of predict for speed on single samples
+		preds = self.model.model(inputToModel, training=False)
+		value_array = preds[0].numpy()
+		logits_array = preds[1].numpy()
 		value = value_array[0][0]
 
 		logits = logits_array[0]
@@ -122,7 +128,7 @@ class Agent():
 
 		#SOFTMAX
 		odds = np.exp(logits)
-		probs = odds / np.sum(odds) ###put this just before the for?
+		probs = odds / np.sum(odds)
 
 		return ((value, probs, allowedActions))
 
@@ -195,7 +201,7 @@ class Agent():
 			training_targets = {'value_head': np.array([row['value'] for row in minibatch])
 								, 'policy_head': np.array([row['AV'] for row in minibatch])} 
 
-			fit = self.model.fit(training_states, training_targets, epochs=cfg['rl']['epochs'], verbose=1, validation_split=0, batch_size = 32)
+			fit = self.model.fit(training_states, training_targets, epochs=cfg['rl']['epochs'], verbose=1, validation_split=0, batch_size = cfg['rl']['batch_size'])
 			lg.logger_mcts.info('NEW LOSS %s', fit.history)
 
 			self.train_overall_loss.append(round(fit.history['loss'][config.EPOCHS - 1],4))
@@ -223,7 +229,7 @@ class Agent():
 	def buildMCTS(self, state):
 		lg.logger_mcts.info('****** BUILDING NEW MCTS TREE FOR AGENT %s ******', self.name)
 		self.root = mc.Node(state)
-		self.mcts = mc.MCTS(self.root, self.cpuct)
+		self.mcts = mc.MCTS(self.root, self.cpuct, self.cfg)
 
 	def changeRootMCTS(self, state):
 		lg.logger_mcts.info('****** CHANGING ROOT OF MCTS TREE TO %s FOR AGENT %s ******', state.id, self.name)

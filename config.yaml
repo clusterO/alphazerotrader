@@ -4,12 +4,12 @@ trading:
   window_size: 60
   initial_balance: 1000
   fee: 0.0005 # 5 bps
-  holding_penalty: 0.00001
+  holding_penalty: 0.0001 # 10x increase to force exploration
   episode_length_range: [150, 400]
 
 rl:
   episodes: 30
-  mcts_sims: 50
+  mcts_sims: 100 # Increased from 50
   memory_size: 30000
   turns_until_tau0: 10
   cpuct: 1.0
@@ -19,7 +19,7 @@ rl:
   epochs: 1
   learning_rate: 0.001
   momentum: 0.9
-  training_loops: 10
+  training_loops: 100 # 10x increase to utilize the 30k memory better
 
 model:
   type: "transformer"

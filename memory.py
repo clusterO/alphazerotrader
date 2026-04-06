@@ -1,5 +1,7 @@
 import numpy as np
 from collections import deque
+import pickle
+import os
 
 import config
 
@@ -8,6 +10,16 @@ class Memory:
 		self.MEMORY_SIZE = MEMORY_SIZE
 		self.ltmemory = deque(maxlen=MEMORY_SIZE)
 		self.stmemory = deque(maxlen=MEMORY_SIZE)
+
+	def save(self, path):
+		with open(path, 'wb') as f:
+			pickle.dump(self, f)
+
+	def load(self, path):
+		if os.path.exists(path):
+			with open(path, 'rb') as f:
+				return pickle.load(f)
+		return self
 
 	def commit_stmemory(self, identities, state, actionValues):
 		for r in identities(state, actionValues):

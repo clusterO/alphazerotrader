@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 import tensorflow as tf
+import keras
 from keras import layers, models, regularizers, Model
 from loss import softmax_cross_entropy_with_logits
 import loggers as lg
@@ -16,9 +17,15 @@ def positional_encoding(length, depth):
     pos_encoding = np.concatenate([np.sin(angle_rads), np.cos(angle_rads)], axis=-1)
     return tf.cast(pos_encoding, dtype=tf.float32)
 
+@keras.saving.register_keras_serializable()
 class TransformerBlock(layers.Layer):
-    def __init__(self, d_model, num_heads, ff_dim, rate=0.1):
-        super(TransformerBlock, self).__init__()
+    def __init__(self, d_model, num_heads, ff_dim, rate=0.1, **kwargs):
+        super(TransformerBlock, self).__init__(**kwargs)
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.ff_dim = ff_dim
+        self.rate = rate
+        
         self.att = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model)
         self.ffn = models.Sequential([
             layers.Dense(ff_dim, activation="relu"),
@@ -36,6 +43,16 @@ class TransformerBlock(layers.Layer):
         ffn_output = self.ffn(out1)
         ffn_output = self.dropout2(ffn_output, training=training)
         return self.layernorm2(out1 + ffn_output)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "ff_dim": self.ff_dim,
+            "rate": self.rate,
+        })
+        return config
 
 class Gen_Model():
     def __init__(self, reg_const, learning_rate, input_dim, output_dim):

@@ -5,17 +5,34 @@ import os
 import numpy as np
 from datetime import datetime
 
-def fetch_historical_data(symbol='BTC/USDT', timeframe='1h', since=None, limit=2000, exchange_id='binance'):
+def fetch_historical_data(symbol='BTC/USDT', timeframe='1h', since=None, limit=5000, exchange_id='binance'):
     """
-    Fetch historical OHLCV data and calculate technical indicators.
+    Fetch historical OHLCV data with pagination to ensure limit is met.
     """
     exchange_class = getattr(ccxt, exchange_id)
     exchange = exchange_class()
     
     print(f"Fetching {limit} candles for {symbol} ({timeframe}) from {exchange_id}...")
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since, limit)
     
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    all_ohlcv = []
+    current_since = since
+    
+    while len(all_ohlcv) < limit:
+        # Fetch a batch
+        remaining = limit - len(all_ohlcv)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, current_since, min(remaining, 1000))
+        
+        if not ohlcv:
+            break
+            
+        all_ohlcv.extend(ohlcv)
+        # Move 'since' to the last candle + 1ms to get the next page
+        current_since = ohlcv[-1][0] + 1
+        
+        if len(ohlcv) < 100: # No more data available
+            break
+
+    df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     
     # 1. Log Returns

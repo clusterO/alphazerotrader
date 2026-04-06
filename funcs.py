@@ -82,6 +82,7 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
 
         while done == 0:
             turn = turn + 1
+            print(f"[{turn}]", end="", flush=True)
     
             #### Run the MCTS algo and return an action
             if turn < turns_until_tau0:
@@ -149,9 +150,5 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
                     logger.info('DRAW...')
                     scores['drawn'] = scores['drawn'] + 1
                     sp_scores['drawn'] = sp_scores['drawn'] + 1
-
-                pts = state.score
-                points[players[state.playerTurn]['name']].append(pts[0])
-                points[players[-state.playerTurn]['name']].append(pts[1])
 
     return (scores, memory, points, sp_scores)
