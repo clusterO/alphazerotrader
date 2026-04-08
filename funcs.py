@@ -39,6 +39,38 @@ def playMatchesBetweenVersions(env, run_version, player1version, player2version,
     return (scores, memory, points, sp_scores)
 
 
+def playMatchesSingle(env, player, EPISODES, logger):
+    points = []
+    
+    for e in range(EPISODES):
+        logger.info('====================')
+        logger.info('EVALUATION EPISODE %d OF %d', e+1, EPISODES)
+        logger.info('====================')
+        print(f"[{e+1}]", end="", flush=True)
+
+        state = env.reset()
+        done = 0
+        turn = 0
+        player.mcts = None
+        ep_reward = 0
+
+        while done == 0:
+            turn = turn + 1
+            # In evaluation, we use tau=0 (deterministic)
+            action, pi, MCTS_value, NN_value = player.act(state, 0)
+            
+            state, reward, done, _ = env.step(action)
+            ep_reward += reward
+
+        points.append(ep_reward)
+        
+        if player.mcts:
+            player.mcts.clear()
+        gc.collect()
+        print(f" Done (PnL: {ep_reward:.4f})")
+
+    return points
+
 def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memory = None, goes_first = 0):
 
     scores = {player1.name:0, "drawn": 0, player2.name:0}

@@ -126,7 +126,13 @@ while 1:
         print('TOURNAMENT (UNSEEN DATA)...')
         val_data = pd.read_csv('data/val.csv')
         val_env = Game(val_data, cfg)
-        scores, _, points, _ = playMatches(val_env, best_player, current_player, cfg['evaluation']['eval_episodes'], lg.logger_tourney, turns_until_tau0 = 0, memory = None)
+
+        from funcs import playMatchesSingle
+        print(f"Evaluating {best_player.name} (v{best_player_version}):")
+        best_points = playMatchesSingle(val_env, best_player, cfg['evaluation']['eval_episodes'], lg.logger_tourney)
+
+        print(f"Evaluating {current_player.name} (New):")
+        curr_points = playMatchesSingle(val_env, current_player, cfg['evaluation']['eval_episodes'], lg.logger_tourney)
 
         # Calculate Sharpe (Phase 4.3)
         def get_sharpe(pts):
@@ -137,9 +143,8 @@ while 1:
             # Annualization: sqrt(252*24) for 1h candles
             return (mu / sigma) * np.sqrt(252 * 24)
 
-        best_sharpe = get_sharpe(points[best_player.name])
-        curr_sharpe = get_sharpe(points[current_player.name])
-
+        best_sharpe = get_sharpe(best_points)
+        curr_sharpe = get_sharpe(curr_points)
         print(f'BEST PLAYER SHARPE (ANN): {best_sharpe:.4f}')
         print(f'CURR PLAYER SHARPE (ANN): {curr_sharpe:.4f}')
 

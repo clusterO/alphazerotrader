@@ -25,7 +25,6 @@ class TransformerBlock(layers.Layer):
         self.num_heads = num_heads
         self.ff_dim = ff_dim
         self.rate = rate
-        
         self.att = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model)
         self.ffn = models.Sequential([
             layers.Dense(ff_dim, activation="relu"),
@@ -46,19 +45,14 @@ class TransformerBlock(layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-        config.update({
-            "d_model": self.d_model,
-            "num_heads": self.num_heads,
-            "ff_dim": self.ff_dim,
-            "rate": self.rate,
-        })
+        config.update({"d_model": self.d_model, "num_heads": self.num_heads, "ff_dim": self.ff_dim, "rate": self.rate})
         return config
 
 class Gen_Model():
     def __init__(self, reg_const, learning_rate, input_dim, output_dim):
         self.reg_const = reg_const
         self.learning_rate = learning_rate
-        self.input_dim = input_dim # (window_size, features)
+        self.input_dim = input_dim
         self.output_dim = output_dim
 
     def predict(self, x):
@@ -71,57 +65,62 @@ class Gen_Model():
         self.model.save(run_folder + 'models/version' + "{0:0>4}".format(version) + '.keras')
 
     def read(self, game, run_number, version):
-        # Keras 3 prefers .keras extension
         path = run_archive_folder + game + '/run' + str(run_number).zfill(4) + "/models/version" + "{0:0>4}".format(version) + '.keras'
-        return models.load_model(path, custom_objects={'softmax_cross_entropy_with_logits': softmax_cross_entropy_with_logits})
+        return models.load_model(path, custom_objects={'softmax_cross_entropy_with_logits': softmax_cross_entropy_with_logits, 'TransformerBlock': TransformerBlock})
 
     def printWeightAverages(self):
-        lg.logger_model.info('Transformer Model weight logging skipped for brevity.')
+        lg.logger_model.info('Model weight logging skipped.')
 
-class Residual_CNN(Gen_Model): # Keeping name for compatibility with main.py
+class Residual_CNN(Gen_Model):
     def __init__(self, reg_const, learning_rate, input_dim, output_dim, hidden_layers=None):
         super().__init__(reg_const, learning_rate, input_dim, output_dim)
-        # We use config.yaml values instead of hidden_layers list
         import yaml
         with open("config.yaml", 'r') as f:
             self.cfg = yaml.safe_load(f)
-        
         self.model = self._build_model()
 
     def _build_model(self):
         m_cfg = self.cfg['model']
         inputs = layers.Input(shape=self.input_dim)
         
-        # 1. Projection to d_model
-        x = layers.Dense(m_cfg['d_model'])(inputs)
-        
-        # 2. Add Positional Encoding
-        pos_enc = positional_encoding(self.input_dim[0], m_cfg['d_model'])
-        x = x + pos_enc
-        
-        # 3. Transformer Layers
-        for _ in range(m_cfg['num_layers']):
-            x = TransformerBlock(m_cfg['d_model'], m_cfg['num_heads'], m_cfg['d_model']*4, m_cfg['dropout'])(x)
-        
-        # 4. Extract representation (Global Average Pooling across time)
-        x = layers.GlobalAveragePooling1D()(x)
-        
-        # 5. Value Head
-        vh = layers.Dense(m_cfg['d_model'] // 2, activation='relu')(x)
+        if m_cfg['type'] == 'transformer':
+            x = layers.Dense(m_cfg['d_model'])(inputs)
+            x = x + positional_encoding(self.input_dim[0], m_cfg['d_model'])
+            for _ in range(m_cfg['num_layers']):
+                x = TransformerBlock(m_cfg['d_model'], m_cfg['num_heads'], m_cfg['d_model']*4, m_cfg['dropout'])(x)
+            x = layers.GlobalAveragePooling1D()(x)
+
+        elif m_cfg['type'] == 'causal_cnn_attn':
+            # Option B: Causal CNN + Attention
+            x = layers.Conv1D(filters=64, kernel_size=3, padding='causal', activation='relu')(inputs)
+            x = layers.BatchNormalization()(x)
+            x = layers.Conv1D(filters=64, kernel_size=5, padding='causal', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            # Lightweight Global Attention
+            attn = layers.MultiHeadAttention(num_heads=2, key_dim=64)(x, x)
+            x = layers.LayerNormalization()(x + attn)
+            x = layers.GlobalAveragePooling1D()(x)
+
+        else: # Default: original ResNet
+            x = layers.Conv1D(filters=64, kernel_size=3, padding='same', activation='relu')(inputs)
+            for _ in range(3):
+                shortcut = x
+                x = layers.Conv1D(filters=64, kernel_size=3, padding='same', activation='relu')(x)
+                x = layers.Conv1D(filters=64, kernel_size=3, padding='same')(x)
+                x = layers.Add()([x, shortcut])
+                x = layers.Activation('relu')(x)
+            x = layers.GlobalAveragePooling1D()(x)
+
+        # Common Heads
+        vh = layers.Dense(64, activation='relu')(x)
         vh = layers.Dense(1, activation='tanh', name='value_head')(vh)
-        
-        # 6. Policy Head
-        ph = layers.Dense(m_cfg['d_model'] // 2, activation='relu')(x)
+        ph = layers.Dense(64, activation='relu')(x)
         ph = layers.Dense(self.output_dim, activation='linear', name='policy_head')(ph)
         
         model = Model(inputs=inputs, outputs=[vh, ph])
-        
         optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
-        model.compile(
-            loss={'value_head': 'mse', 'policy_head': softmax_cross_entropy_with_logits},
-            optimizer=optimizer,
-            loss_weights={'value_head': 0.5, 'policy_head': 0.5}
-        )
+        model.compile(loss={'value_head': 'mse', 'policy_head': softmax_cross_entropy_with_logits},
+                      optimizer=optimizer, loss_weights={'value_head': 0.5, 'policy_head': 0.5})
         return model
 
     def convertToModelInput(self, state):

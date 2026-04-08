@@ -10,8 +10,12 @@ trading:
 rl:
   episodes: 30
   mcts_sims: 100 
+  # --- SEARCH MODE ---
+  # Set mcts_batch_size: 1 for traditional sequential search (No Batching)
+  # Set mcts_batch_size: 16+ for Option A: Batched Search (Current High Speed)
   mcts_batch_size: 16 
-  mcts_max_depth: 1000 # Safety circuit breaker (must be > max episode length)
+  mcts_max_depth: 1000 
+  # -------------------
   memory_size: 30000
   turns_until_tau0: 10
   cpuct: 1.0
@@ -19,18 +23,23 @@ rl:
   alpha: 0.8
   batch_size: 256
   epochs: 1
-  learning_rate: 0.0001 # 10x reduction for stability
+  learning_rate: 0.0001 
   momentum: 0.9
   training_loops: 100
 
 model:
+  # --- ARCHITECTURE SELECTION ---
+  # type: "transformer"      -> Full attention power (Current)
+  # type: "causal_cnn_attn" -> Hybrid Option B (Fast + Global context)
+  # type: "resnet"          -> Fast identify local patterns
   type: "transformer"
+  # ------------------------------
   d_model: 64
   num_heads: 4
   num_layers: 2
   dropout: 0.1
 
 evaluation:
-  eval_episodes: 5 # Faster tournament feedback (approx 30 mins)
-  scoring_threshold: 1.1 # 10% improvement in Sharpe
-  metric: "sharpe" # "sharpe" or "calmar"
+  eval_episodes: 5 
+  scoring_threshold: 1.1 
+  metric: "sharpe" 
