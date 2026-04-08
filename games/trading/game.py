@@ -11,7 +11,6 @@ class TradingGame:
         self.window_size = config['trading']['window_size']
         self.initial_balance = config['trading']['initial_balance']
         self.fee = config['trading']['fee']
-        self.holding_penalty = config['trading']['holding_penalty']
         
         self.feature_columns = ['log_return', 'rsi', 'atr', 'vol_10', 'vol_30', 'rel_high_low', 'vol_delta']
         self.n_features = len(self.feature_columns)
@@ -27,7 +26,7 @@ class TradingGame:
             'window_size': self.window_size,
             'initial_balance': self.initial_balance,
             'fee': self.fee,
-            'holding_penalty': self.holding_penalty,
+            'tanh_scale': config['trading'].get('tanh_scale', 10.0),
             'feature_columns': self.feature_columns,
             'n_features': self.n_features,
             'n_portfolio': self.n_portfolio
@@ -39,13 +38,13 @@ class TradingGame:
         min_len, max_len = self.config['trading']['episode_length_range']
         available_data = len(self.data) - self.window_size - 10
         
-        if available_data <= min_len:
-            self.episode_length = max(10, available_data)
-        else:
-            self.episode_length = np.random.randint(min_len, min(max_len, available_data + 1))
+        # Safe bounds for episode length
+        self.episode_length = np.random.randint(min_len, max(min_len + 1, min(max_len, available_data + 1)))
         
-        max_start = len(self.data) - self.episode_length - 5
-        self.start_tick = np.random.randint(self.window_size, max(self.window_size + 1, max_start))
+        # Safe bounds for start tick
+        min_start = self.window_size
+        max_start = max(min_start + 1, len(self.data) - self.episode_length - 5)
+        self.start_tick = np.random.randint(min_start, max_start)
         
         portfolio = {
             'balance': float(self.initial_balance),
@@ -125,48 +124,67 @@ class TradingGameState:
 
     def _get_value(self):
         if self.isEndGame:
-            pnl = (self.portfolio['balance'] / self.game_config['initial_balance']) - 1.0
-            return (np.tanh(pnl), 0, 0)
+            pnl_pct = (self.portfolio['balance'] / self.game_config['initial_balance']) - 1.0
+            # Apply TANH_SCALE from config
+            z = np.tanh(self.game_config['tanh_scale'] * pnl_pct)
+            return (z, 0, 0)
         return (0, 0, 0)
 
     def takeAction(self, action):
-        # 1. IMMUTABILITY ASSERTION (Phase 1.3)
+        # 1. IMMUTABILITY ASSERTION
         state_snapshot = (self.current_tick, self.portfolio['position'], self.portfolio['balance'])
         
         # 2. Logic
         new_p = self.portfolio.copy()
-        current_price = self.data.iloc[self.current_tick]['close']
-        reward = 0.0
+        price_at_t = self.data.iloc[self.current_tick]['close']
+        balance_before_step = new_p['balance']
         
+        # Execute Trade & Fees (applied to balance at T)
         if action != self.portfolio['position']:
+            # Close cost
             if self.portfolio['position'] != 0:
                 new_p['balance'] -= new_p['balance'] * self.game_config['fee']
+            
+            # Open cost
             if action != 0:
                 new_p['balance'] -= new_p['balance'] * self.game_config['fee']
-                new_p['entry_price'] = current_price
-                new_p['step_count'] = 0
+                new_p['entry_price'] = price_at_t
                 new_p['trade_count'] += 1
+            
             new_p['position'] = action
+            new_p['step_count'] = 0
         else:
             new_p['step_count'] += 1
 
-        if self.portfolio['position'] != 0:
-            prev_price = self.data.iloc[self.current_tick - 1]['close']
-            price_change = (current_price / prev_price) - 1.0
-            pnl_delta = price_change * self.portfolio['position']
-            new_p['balance'] += new_p['balance'] * pnl_delta
-            new_p['realized_pnl'] += pnl_delta
-            reward = pnl_delta + 0.00001
+        # Advance Time strictly to T+1 (Ensures unique ID)
+        next_tick = self.current_tick + 1
         
-        if action == 0:
-            new_p['balance'] -= new_p['balance'] * self.game_config['holding_penalty']
-            reward -= self.game.holding_penalty if hasattr(self, 'game') else 0 # safety
-            # Better use game_config
-            reward = -self.game_config['holding_penalty']
+        # Safety: Check if we just stepped past the absolute end of data
+        if next_tick >= len(self.data):
+            # Create terminal state at the edge
+            new_state = TradingGameState(
+                self.data, self.current_tick, self.end_tick,
+                new_p, self.game_config
+            )
+            new_state.isEndGame = True # Force termination
+            return (new_state, 0.0, 1)
 
-        # 3. Create NEW independent state
+        price_at_t_plus_1 = self.data.iloc[next_tick]['close']
+        
+        # Calculate PnL for the move [T -> T+1] using the position held during that interval
+        if new_p['position'] != 0:
+            price_change_pct = (price_at_t_plus_1 / price_at_t) - 1.0
+            pnl_delta_pct = price_change_pct * new_p['position']
+            
+            new_p['balance'] += new_p['balance'] * pnl_delta_pct
+            new_p['realized_pnl'] += pnl_delta_pct
+            
+        # Step Reward: delta in total portfolio value normalized by starting balance
+        reward = (new_p['balance'] - balance_before_step) / balance_before_step
+
+        # 3. Create NEW independent state at T+1
         new_state = TradingGameState(
-            self.data, self.current_tick + 1, self.end_tick,
+            self.data, next_tick, self.end_tick,
             new_p, self.game_config
         )
         

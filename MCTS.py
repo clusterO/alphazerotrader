@@ -34,7 +34,7 @@ class Edge():
 					'Q': 0,
 					'P': prior,
 				}
-				
+		self.virtual_loss = 0 # Phase 4.2: For batched MCTS
 
 class MCTS():
 
@@ -46,14 +46,21 @@ class MCTS():
 		self.addNode(root)
 		self.root_nu = None # Lazy initialization
 
-	def moveToLeaf(self):
+	def moveToLeaf(self, apply_virtual_loss=False):
 		breadcrumbs = []
 		currentNode = self.root
 
 		done = 0
 		value = 0
+		depth = 0
+		max_depth = self.cfg['rl'].get('mcts_max_depth', 1000)
 
 		while not currentNode.isLeaf():
+			depth += 1
+			if depth > max_depth:
+				lg.logger_mcts.warning(f"CIRCUIT BREAKER: MCTS depth {depth} exceeded max {max_depth}. Forcing leaf at {currentNode.id}")
+				break
+
 			maxQU = -99999
 
 			if currentNode == self.root:
@@ -68,29 +75,24 @@ class MCTS():
 
 			Nb = 0
 			for action, edge in currentNode.edges:
-				Nb = Nb + edge.stats['N']
+				Nb = Nb + edge.stats['N'] + edge.virtual_loss
 
 			simulationAction = None
 			simulationEdge = None
 
 			for idx, (action, edge) in enumerate(currentNode.edges):
+				# Q is adjusted by virtual loss
+				N = edge.stats['N'] + edge.virtual_loss
+				W = edge.stats['W'] - edge.virtual_loss # Treat virtual loss as -1 value
+				Q = W / (N + 1e-9)
 
 				U = self.cpuct * \
 					((1-epsilon) * edge.stats['P'] + epsilon * nu[idx] )  * \
-					np.sqrt(Nb) / (1 + edge.stats['N'])
+					np.sqrt(Nb) / (1 + N)
 					
-				Q = edge.stats['Q']
-				if isinstance(Q, np.ndarray):
-					Q = Q.item()
-
-				lg.logger_mcts.info('action: %d (%d)... N = %d, P = %f, nu = %f, adjP = %f, W = %f, Q = %f, U = %f, Q+U = %f'
-					, int(action), int(action % 7), int(edge.stats['N']), float(edge.stats['P']), float(nu[idx]), float(((1-epsilon) * edge.stats['P'] + epsilon * nu[idx] ))
-					, float(edge.stats['W'].item() if isinstance(edge.stats['W'], np.ndarray) else edge.stats['W'])
-					, float(Q), float(U.item() if isinstance(U, np.ndarray) else U), float((Q+U).item() if isinstance(Q+U, np.ndarray) else Q+U))
-
 				QU = Q + U
 				if np.isnan(QU):
-					QU = -np.inf   # treat NaN as very bad
+					QU = -np.inf
 
 				if QU > maxQU:
 					maxQU = QU
@@ -98,51 +100,38 @@ class MCTS():
 					simulationEdge = edge
 
 			if simulationAction is None:
-				lg.logger_mcts.warning('All actions had NaN QU! Picking first edge by default.')
 				simulationAction, simulationEdge = currentNode.edges[0]
 
-			lg.logger_mcts.info('action with highest Q + U...%d', simulationAction)
+			if apply_virtual_loss:
+				simulationEdge.virtual_loss += 1
 
-			newState, value, done = currentNode.state.takeAction(simulationAction) #the value of the newState from the POV of the new playerTurn
 			currentNode = simulationEdge.outNode
 			breadcrumbs.append(simulationEdge)
 
-		lg.logger_mcts.info('DONE...%d', done)
-
 		return currentNode, value, done, breadcrumbs
 
-
-
-	def backFill(self, leaf, value, breadcrumbs):
-		lg.logger_mcts.info('------DOING BACKFILL------')
-
-		currentPlayer = leaf.state.playerTurn
+	def backFill(self, leaf, value, breadcrumbs, remove_virtual_loss=False):
+		# If trading, direction is always 1
+		direction = 1
 
 		for edge in breadcrumbs:
-			playerTurn = edge.playerTurn
-			if playerTurn == currentPlayer:
-				direction = 1
-			else:
-				direction = -1
-			
-			# If trading, we don't have an opponent, so we don't flip the value
-			# In TradingGame, playerTurn is always 1 for now.
-			if hasattr(config, 'SYMBOL'):
-				direction = 1
+			if remove_virtual_loss:
+				edge.virtual_loss -= 1
 
 			edge.stats['N'] = edge.stats['N'] + 1
 			edge.stats['W'] = edge.stats['W'] + value * direction
 			edge.stats['Q'] = edge.stats['W'] / edge.stats['N']
 
-			lg.logger_mcts.info('updating edge with value %f for player %d... N = %d, W = %f, Q = %f'
-				, float(value * direction)
-				, int(playerTurn)
-				, int(edge.stats['N'])
-				, float(edge.stats['W'])
-				, float(edge.stats['Q'])
-				)
-
-			edge.outNode.state.render(lg.logger_mcts)
+	def clear(self):
+		# Manually break circular references to help GC
+		for node_id in list(self.tree.keys()):
+			node = self.tree[node_id]
+			for action, edge in node.edges:
+				edge.inNode = None
+				edge.outNode = None
+			node.edges = []
+		self.tree.clear()
+		self.root = None
 
 	def addNode(self, node):
 		self.tree[node.id] = node

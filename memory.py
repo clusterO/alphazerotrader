@@ -10,6 +10,7 @@ class Memory:
 		self.MEMORY_SIZE = MEMORY_SIZE
 		self.ltmemory = deque(maxlen=MEMORY_SIZE)
 		self.stmemory = deque(maxlen=MEMORY_SIZE)
+		self.metadata = {} # New persistent metadata field
 
 	def save(self, path):
 		with open(path, 'wb') as f:

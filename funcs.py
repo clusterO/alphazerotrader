@@ -1,5 +1,7 @@
 import numpy as np
 import random
+import gc
+import time
 
 import loggers as lg
 
@@ -82,6 +84,7 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
 
         while done == 0:
             turn = turn + 1
+            start_time = time.time()
             print(f"[{turn}]", end="", flush=True)
     
             #### Run the MCTS algo and return an action
@@ -89,6 +92,9 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
                 action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, 1)
             else:
                 action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, 0)
+
+            move_time = time.time() - start_time
+            print(f"({move_time:.1f}s)", end=" ", flush=True)
 
             if memory != None:
                 ####Commit the move to memory
@@ -150,5 +156,14 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
                     logger.info('DRAW...')
                     scores['drawn'] = scores['drawn'] + 1
                     sp_scores['drawn'] = sp_scores['drawn'] + 1
+
+        # Clear MCTS trees to free memory (Phase 4.2 Fix)
+        if player1.mcts:
+            player1.mcts.clear()
+        if player2.mcts:
+            player2.mcts.clear()
+        gc.collect()
+        
+        print("") # Phase 5: Newline for readability between episodes
 
     return (scores, memory, points, sp_scores)

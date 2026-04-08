@@ -116,7 +116,7 @@ class Residual_CNN(Gen_Model): # Keeping name for compatibility with main.py
         
         model = Model(inputs=inputs, outputs=[vh, ph])
         
-        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
         model.compile(
             loss={'value_head': 'mse', 'policy_head': softmax_cross_entropy_with_logits},
             optimizer=optimizer,
