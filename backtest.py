@@ -133,4 +133,6 @@ def backtest(model_v=None, data_path='data/val.csv'):
     print(f"Saved trades to: {csv_path}")
 
 if __name__ == "__main__":
-    backtest()
+    import sys
+    path = sys.argv[1] if len(sys.argv) > 1 else 'data/test.csv'
+    backtest(data_path=path)

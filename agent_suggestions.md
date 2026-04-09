@@ -1,17 +1,38 @@
-# Agent Suggestions for Future Phases
+# AlphaZero Trader - Idea Tracking & Backlog
 
-This file tracks technical improvements identified by the builder agent during Phase 2/3 that fall outside the immediate scope of the consultant's gated plan.
+This file tracks implemented features and future architectural improvements identified during the research phases.
 
-## 1. Feature Engineering
-- **Normal Distribution**: Z-score normalization per window is good, but for some features like `vol_delta`, log-scaling or robust scaling might be better to handle outliers.
-- **Time Features**: Add sin/cos encoding for "hour of day" and "day of week" to the state tensor.
+## 1. Current State (v3.2.9)
+- **Model**: Transformer (64-dim, 4 heads, 2 layers).
+- **Inference**: Batched MCTS (Batch size 16, 100 sims).
+- **Environment**: High-speed NumPy engine.
+- **Current Features**:
+    - `log_return`
+    - `rsi` (14)
+    - `atr` (14)
+    - `vol_10`, `vol_30` (Rolling Volatility)
+    - `rel_high_low` (30-period relative position)
+    - `vol_delta` (Volume change)
+- **Portfolio Features**:
+    - `position` (-1, 0, 1)
+    - `pnl_since_entry`
+    - `steps_held` (normalized)
 
-## 2. World Model Details
-- When implementing the World Model, consider a VAE (Variational Autoencoder) or a simple GMM (Gaussian Mixture Model) to simulate price returns and volatility, rather than just a linear drift.
+## 2. Future Improvements (Phase 6+)
 
-## 3. Training Efficiency
-- **Gradient Clipping**: Essential for Transformers to prevent explosion on market shocks.
-- **Learning Rate Scheduler**: Decay the learning rate as iterations increase.
+### Better Eyes (Perception)
+- [ ] **Multi-Timeframe Context**: Add 4h or 1d candle data as secondary input channels to the Transformer.
+- [ ] **Advanced Indicators**: MACD, Bollinger Band width, Ichimoku Cloud components.
+- [ ] **Orderbook Depth**: If available, add bid/ask spread and depth imbalance.
 
-## 4. Multi-Symbol Training
-- Once v3.1 is stable, train on a basket of symbols (ETH, SOL, etc.) simultaneously to build a more robust, generalized feature extractor.
+### Risk & Reward Refinement
+- [ ] **Drawdown Penalty**: Modify reward to penalize consecutive losing steps or max drawdown within an episode.
+- [ ] **Volatility-Adjusted PnL**: Reward based on Sortino ratio logic rather than pure PnL.
+
+### Training & Evaluation Efficiency
+- [ ] **Evaluation Optimization**: Discuss finding the "Sweet Spot" between 5 and 30 evaluation episodes.
+- [ ] **Asynchronous Collection**: Move self-play to a separate process from training.
+- [ ] **Dynamic Sim Count**: Use fewer MCTS simulations early in training and increase them as the model matures.
+
+## 3. Active Research
+- **Current Goal**: Validating generalization across Regimes (2025 Bull vs 2022 Bear).
