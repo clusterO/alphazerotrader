@@ -111,10 +111,11 @@ class Residual_CNN(Gen_Model):
                 x = layers.Activation('relu')(x)
             x = layers.GlobalAveragePooling1D()(x)
 
-        # Common Heads
-        vh = layers.Dense(64, activation='relu')(x)
+        # Common Heads (restored to d_model // 2 for compatibility)
+        head_size = m_cfg['d_model'] // 2
+        vh = layers.Dense(head_size, activation='relu')(x)
         vh = layers.Dense(1, activation='tanh', name='value_head')(vh)
-        ph = layers.Dense(64, activation='relu')(x)
+        ph = layers.Dense(head_size, activation='relu')(x)
         ph = layers.Dense(self.output_dim, activation='linear', name='policy_head')(ph)
         
         model = Model(inputs=inputs, outputs=[vh, ph])
