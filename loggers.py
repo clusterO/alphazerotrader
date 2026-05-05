@@ -14,7 +14,7 @@ LOGGER_DISABLED = {
 , 'model': False}
 
 
-logger_mcts = setup_logger('logger_mcts', run_folder + 'logs/logger_mcts.log', logging.WARNING)
+logger_mcts = setup_logger('logger_mcts', run_folder + 'logs/logger_mcts.log', logging.INFO)
 logger_mcts.disabled = LOGGER_DISABLED['mcts']
 
 logger_main = setup_logger('logger_main', run_folder + 'logs/logger_main.log')

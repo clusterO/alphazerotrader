@@ -4,7 +4,7 @@ import tensorflow as tf
 import yaml
 import os
 import matplotlib.pyplot as plt
-from games.trading.game import TradingGame
+from game import TradingGame
 from model import Residual_CNN, TransformerBlock
 from loss import softmax_cross_entropy_with_logits
 from agent import Agent
@@ -29,6 +29,9 @@ def backtest(model_v=None, data_path='data/val.csv'):
     print(f"Data: {data_path}")
     
     # 3. Load Environment
+    if not os.path.exists(data_path) and os.path.exists(os.path.join('data/backtest', data_path)):
+        data_path = os.path.join('data/backtest', data_path)
+    
     data = pd.read_csv(data_path)
     env = TradingGame(data, cfg)
     
@@ -42,41 +45,64 @@ def backtest(model_v=None, data_path='data/val.csv'):
     })
     nn.model.set_weights(m_tmp.get_weights())
     
+    # PHASE 6: AUTOMATIC FAIR MODE OVERRIDE
+    # We force mcts_sims to 0 for backtesting to ensure the agent cannot "see" 
+    # future prices through MCTS simulations. Training still uses the config value.
+    if cfg['rl']['mcts_sims'] > 0:
+        print("\n" + "-"*60)
+        print("INFO: Enforcing FAIR MODE for Backtest")
+        print("Overriding mcts_sims from {} to 0 to prevent lookahead bias.".format(cfg['rl']['mcts_sims']))
+        print("-"*60 + "\n")
+        cfg['rl']['mcts_sims'] = 0
+    
     agent = Agent('backtest_agent', env.state_size, env.action_size, cfg['rl']['mcts_sims'], cfg['rl']['cpuct'], nn)
     
     # 5. Run Walk-through
-    state = env.reset()
-    # Force start at the beginning of the window
-    env.gameState.current_tick = env.window_size
-    env.gameState.end_tick = len(data) - 1
+    # We set end_tick to len - 1 to allow the agent to act on 19938 and see price 19939.
+    # The loop will stop when it reaches 19939 where isEndGame becomes True.
+    start_tick = env.window_size
+    end_tick = len(data) - 1
+    state = env.reset(start_tick=start_tick, end_tick=end_tick)
     
     history = []
-    done = False
     
     print("Running episode...", end="", flush=True)
     
-    while not done:
+    while not env.gameState.isEndGame:
         # Use tau=0 for deterministic best actions
         action, pi, mcts_v, nn_v = agent.act(env.gameState, 0)
         
         # Log before step
-        price = data.iloc[env.gameState.current_tick]['close']
+        # Use env.close_prices instead of data.iloc to ensure alignment with agent's view
+        price = env.close_prices[env.gameState.current_tick]
         pos = env.gameState.portfolio['position']
         bal = env.gameState.portfolio['balance']
         
         history.append({
             'tick': env.gameState.current_tick,
-            'price': price,
-            'position': pos,
-            'balance': bal,
-            'action': action,
-            'mcts_value': mcts_v,
-            'nn_value': nn_v
+            'price': float(price),
+            'position': int(pos),
+            'balance': float(bal),
+            'action': int(action),
+            'mcts_value': float(mcts_v),
+            'nn_value': float(nn_v)
         })
         
         # Step
         _, reward, done, _ = env.step(action)
         if env.gameState.current_tick % 10 == 0: print(".", end="", flush=True)
+
+    # Log the final state
+    price = env.close_prices[env.gameState.current_tick]
+    history.append({
+        'tick': env.gameState.current_tick,
+        'price': float(price),
+        'position': int(env.gameState.portfolio['position']),
+        'balance': float(env.gameState.portfolio['balance']),
+        'action': -1,
+        'mcts_value': 0,
+        'nn_value': 0
+    })
 
     print(" Done.")
     
@@ -91,7 +117,8 @@ def backtest(model_v=None, data_path='data/val.csv'):
     df['returns'] = df['balance'].pct_change().fillna(0)
     mu = df['returns'].mean()
     sigma = df['returns'].std()
-    sharpe = (mu / (sigma + 1e-9)) * np.sqrt(252 * 24)
+    ann_factor = np.sqrt(252 * 24)
+    sharpe = (mu / (sigma + 1e-9)) * ann_factor
     
     # Drawdown
     df['cum_max'] = df['balance'].cummax()
@@ -103,7 +130,7 @@ def backtest(model_v=None, data_path='data/val.csv'):
     print(f"Final Balance:   {final_bal:.2f}")
     print(f"Total Return:    {total_return*100:.2f}%")
     print(f"Max Drawdown:    {max_dd*100:.2f}%")
-    print(f"Sharpe (ANN):    {sharpe:.4f}")
+    print(f"Sharpe (ANN):    {sharpe:.4f} (Mean: {mu:.6f}, Std: {sigma:.6f}, Factor: {ann_factor:.2f})")
     
     # 7. Plotting
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -123,12 +150,13 @@ def backtest(model_v=None, data_path='data/val.csv'):
     ax2.legend()
     
     plt.tight_layout()
-    plot_path = f"backtest_v{model_file.split('_v')[-1].replace('.keras','')}.png"
+    data_name = os.path.basename(data_path).replace('.csv', '')
+    plot_path = f"backtest_v{model_file.split('_v')[-1].replace('.keras','')}_on_{data_name}.png"
     plt.savefig(plot_path)
     print(f"Saved plot to: {plot_path}")
     
     # Save CSV
-    csv_path = f"backtest_trades_v{model_file.split('_v')[-1].replace('.keras','')}.csv"
+    csv_path = f"backtest_trades_v{model_file.split('_v')[-1].replace('.keras','')}_on_{data_name}.csv"
     df.to_csv(csv_path, index=False)
     print(f"Saved trades to: {csv_path}")
 

@@ -1,26 +1,33 @@
 trading:
   symbol: "BTC/USDT"
   timeframe: "1h"
+  data_path: "data/stable"
   window_size: 60
   initial_balance: 1000
-  fee: 0.0005 # 5 bps
-  tanh_scale: 10.0 # Maps small % changes to significant value targets
+  testnet: true
+  fee: 0.0001
+  tanh_scale: 3.0 
+  drawdown_threshold: 0.15 
+  idling_penalty: 0.00005
   episode_length_range: [150, 400]
 
 rl:
   episodes: 30
   mcts_sims: 100 
   mcts_batch_size: 16 
-  mcts_max_depth: 1000 
-  memory_size: 30000
-  turns_until_tau0: 10
+  mcts_max_depth: 2000 
+  warmup_iterations: 10
+  warmup_tau: 1.0
+  memory_size: 100000 
+  tau_decay: 0.99
+  tau_min: 0.1 
   cpuct: 1.0
-  epsilon: 0.2
-  alpha: 0.8
+  epsilon: 0.25 
+  alpha: 0.3 
   batch_size: 256
   epochs: 1
   learning_rate: 0.0001 
-  momentum: 0.9
+  lr_decay: 0.99 
   training_loops: 100
 
 model:
@@ -31,6 +38,6 @@ model:
   dropout: 0.1
 
 evaluation:
-  eval_episodes: 30 # Increased for statistical rigor (Phase 5.5)
-  scoring_threshold: 1.1 
+  eval_episodes: 20 
+  scoring_threshold: 1.05 
   metric: "sharpe" 

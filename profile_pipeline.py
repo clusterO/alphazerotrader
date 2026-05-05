@@ -5,7 +5,7 @@ import pandas as pd
 import yaml
 import os
 import tensorflow as tf
-from games.trading.game import TradingGame as Game
+from game import TradingGame
 from agent import Agent
 from model import Residual_CNN, TransformerBlock
 from loss import softmax_cross_entropy_with_logits
@@ -18,8 +18,9 @@ def run_profiled_session():
     with open("config.yaml", 'r') as f:
         cfg = yaml.safe_load(f)
     
-    data = pd.read_csv('data/train.csv')
-    env = Game(data, cfg)
+    data_path = os.path.join(cfg['trading'].get('data_path', 'data/training/BTC_USDT_1h'), 'train.csv')
+    data = pd.read_csv(data_path)
+    env = TradingGame(data, cfg)
     
     # 2. Load Latest Model
     model_dir = run_folder + 'models/'

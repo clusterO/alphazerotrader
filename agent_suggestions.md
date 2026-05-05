@@ -33,6 +33,7 @@ This file tracks implemented features and future architectural improvements iden
 - [ ] **Evaluation Optimization**: Discuss finding the "Sweet Spot" between 5 and 30 evaluation episodes.
 - [ ] **Asynchronous Collection**: Move self-play to a separate process from training.
 - [ ] **Dynamic Sim Count**: Use fewer MCTS simulations early in training and increase them as the model matures.
+- [ ] **Live Session Randomization**: Implement "Planned Session Length" in Paper/Live trading to mirror training randomization. This prevents the agent from staying in the same session indefinitely and forces it to re-evaluate portfolio state from a fresh "reset" periodically.
 
 ## 3. Active Research
 - **Current Goal**: Validating generalization across Regimes (2025 Bull vs 2022 Bear).

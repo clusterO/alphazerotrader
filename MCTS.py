@@ -133,6 +133,31 @@ class MCTS():
 		self.tree.clear()
 		self.root = None
 
+	def prune(self, new_root):
+		# Keep only the subtree starting from new_root
+		new_tree = {}
+		
+		def traverse(node):
+			if node.id not in new_tree:
+				new_tree[node.id] = node
+				for action, edge in node.edges:
+					traverse(edge.outNode)
+		
+		traverse(new_root)
+		
+		# Break references for nodes being discarded to help GC
+		for node_id in list(self.tree.keys()):
+			if node_id not in new_tree:
+				node = self.tree[node_id]
+				for action, edge in node.edges:
+					edge.inNode = None
+					edge.outNode = None
+				node.edges = []
+		
+		self.tree = new_tree
+		self.root = new_root
+		self.root_nu = None # Reset root noise for new root
+
 	def addNode(self, node):
 		self.tree[node.id] = node
 

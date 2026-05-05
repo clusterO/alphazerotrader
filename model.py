@@ -58,6 +58,19 @@ class Gen_Model():
     def predict(self, x):
         return self.model.predict(x, verbose=0)
 
+    @tf.function(reduce_retracing=True)
+    def predict_batch(self, state_batch):
+        # Compiled graph path for MCTS evaluation
+        return self.model(state_batch, training=False)
+
+    def set_lr(self, lr):
+        self.learning_rate = lr
+        # Modern Keras 2/3 compatible way to set LR
+        if hasattr(self.model.optimizer.learning_rate, 'assign'):
+            self.model.optimizer.learning_rate.assign(lr)
+        else:
+            self.model.optimizer.learning_rate = lr
+
     def fit(self, states, targets, epochs, verbose, validation_split, batch_size):
         return self.model.fit(states, targets, epochs=epochs, verbose=verbose, validation_split=validation_split, batch_size=batch_size)
 

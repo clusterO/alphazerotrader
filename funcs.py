@@ -5,7 +5,7 @@ import time
 
 import loggers as lg
 
-from game import Game, GameState
+from game import TradingGame, GameState
 from model import Residual_CNN
 
 from agent import Agent, User
@@ -40,38 +40,38 @@ def playMatchesBetweenVersions(env, run_version, player1version, player2version,
 
 
 def playMatchesSingle(env, player, EPISODES, logger):
-    points = []
+    all_hourly_returns = []
     
     for e in range(EPISODES):
         logger.info('====================')
         logger.info('EVALUATION EPISODE %d OF %d', e+1, EPISODES)
         logger.info('====================')
-        print(f"[{e+1}]", end="", flush=True)
 
         state = env.reset()
         done = 0
-        turn = 0
         player.mcts = None
-        ep_reward = 0
+        ep_pnl = 0
+        turn = 0
 
         while done == 0:
-            turn = turn + 1
-            # In evaluation, we use tau=0 (deterministic)
+            turn += 1
+            start_time = time.time()
             action, pi, MCTS_value, NN_value = player.act(state, 0)
-            
             state, reward, done, _ = env.step(action)
-            ep_reward += reward
+            # reward is (bal_new - bal_old) / bal_old (hourly return)
+            all_hourly_returns.append(reward)
+            ep_pnl += reward
+            move_time = time.time() - start_time
+            print(f"\rEval Ep {e+1}/{EPISODES} | Turn {turn} !({move_time:.1f}s) | PnL: {ep_pnl:+.4f}", end="", flush=True)
 
-        points.append(ep_reward)
-        
         if player.mcts:
             player.mcts.clear()
         gc.collect()
-        print(f" Done (PnL: {ep_reward:.4f})")
+        print(f" | DONE")
 
-    return points
+    return all_hourly_returns
 
-def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memory = None, goes_first = 0):
+def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memory = None, goes_first = 0, force_tau = None, is_warmup = False):
 
     scores = {player1.name:0, "drawn": 0, player2.name:0}
     sp_scores = {'sp':0, "drawn": 0, 'nsp':0}
@@ -85,8 +85,6 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
         logger.info('====================')
         logger.info('EPISODE %d OF %d', e+1, EPISODES)
         logger.info('====================')
-
-        print (str(e+1) + ' ', end='')
 
         state = env.reset()
         
@@ -117,16 +115,34 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
         while done == 0:
             turn = turn + 1
             start_time = time.time()
-            print(f"[{turn}]", end="", flush=True)
-    
-            #### Run the MCTS algo and return an action
-            if turn < turns_until_tau0:
-                action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, 1)
+            
+            if is_warmup:
+                # PHASE 7: FAST WARMUP (No MCTS, Uniform Random)
+                action = random.randint(0, env.action_size - 1)
+                # Store one-hot of the action taken so the model learns from this specific trial
+                pi = np.zeros(env.action_size)
+                pi[action] = 1.0
+                MCTS_value = 0.0
+                NN_value = 0.0
+                mcts_progress = "~"
             else:
-                action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, 0)
+                # Dynamic Temperature Annealing (Phase 3.5)
+                if force_tau is not None:
+                    current_tau = force_tau
+                else:
+                    tau_decay = player1.cfg['rl'].get('tau_decay', 0.98)
+                    tau_min = player1.cfg['rl'].get('tau_min', 0.1)
+                    current_tau = max(tau_min, 1.0 * (tau_decay ** turn))
+
+                #### Run the MCTS algo and return an action
+                action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, current_tau)
+                mcts_progress = "!" # Agent prints '.' during sims and '!' at end
 
             move_time = time.time() - start_time
-            print(f"({move_time:.1f}s)", end=" ", flush=True)
+            
+            # PHASE 8: CLEAN CLI OUTPUT
+            pnl = ep_rewards[player1.name] # Tracking PnL for display
+            print(f"\rEp {e+1}/{EPISODES} | Turn {turn} {mcts_progress}({move_time:.1f}s) | PnL: {pnl:+.4f}", end="", flush=True)
 
             if memory != None:
                 ####Commit the move to memory
@@ -134,8 +150,11 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
 
 
             logger.info('action: %d', action)
-            for r in range(env.grid_shape[0]):
-                logger.info(['----' if x == 0 else '{0:.2f}'.format(np.round(x,2)) for x in pi[env.grid_shape[1]*r : (env.grid_shape[1]*r + env.grid_shape[1])]])
+            if hasattr(env, 'grid_shape') and env.grid_shape[0] > 1:
+                for r in range(env.grid_shape[0]):
+                    logger.info(['----' if x == 0 else '{0:.2f}'.format(np.round(x,2)) for x in pi[env.grid_shape[1]*r : (env.grid_shape[1]*r + env.grid_shape[1])]])
+            else:
+                logger.info(['{0:.2f}'.format(np.round(x,2)) for x in pi])
             logger.info('MCTS perceived value for %s: %f', state.pieces[str(state.playerTurn)] if str(state.playerTurn) in state.pieces else str(state.playerTurn) ,float(np.round(MCTS_value,2)))
             logger.info('NN perceived value for %s: %f', state.pieces[str(state.playerTurn)] if str(state.playerTurn) in state.pieces else str(state.playerTurn) ,float(np.round(NN_value,2)))
             logger.info('====================')
@@ -196,6 +215,8 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
             player2.mcts.clear()
         gc.collect()
         
-        print("") # Phase 5: Newline for readability between episodes
+        # Newline and summary after episode completion
+        pnl = ep_rewards[player1.name]
+        print(f"\rEp {e+1}/{EPISODES} | {turn} Turns | PnL: {pnl:+.4f} | DONE")
 
     return (scores, memory, points, sp_scores)
