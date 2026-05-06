@@ -90,14 +90,14 @@ class DataManager:
         """
         Feature Engineering (STRICTLY ALIGNED WITH game.py)
         """
-        print("Adding technical indicators...")
+        print("Adding technical indicators and regime-aware features...")
         df = df.copy()
         # 1. Log Returns
         df['log_return'] = np.log(df['close'] / df['close'].shift(1))
         
         # 2. Technical Indicators
         df['rsi'] = ta.rsi(df['close'], length=14)
-        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14) / (df['close'] + 1e-9)
         
         # 3. Rolling Volatility
         df['vol_10'] = df['log_return'].rolling(window=10).std()
@@ -110,6 +110,31 @@ class DataManager:
         
         # 5. Volume Delta
         df['vol_delta'] = df['volume'].diff() / (df['volume'].shift(1) + 1e-9)
+
+        # --- REGIME AWARE FEATURES ---
+        close = df['close']
+        returns = df['log_return'] # Using log_return for consistency
+        realized_vol = returns.rolling(20).std()
+
+        # 1. Trend direction — normalized by vol so it's transferable across regimes
+        df['trend_20'] = close.pct_change(20) / (realized_vol + 1e-8)
+        df['trend_50'] = close.pct_change(50) / (realized_vol + 1e-8)
+
+        # 2. Distance from long-term MA — normalized
+        df['dist_ma_200'] = (close - close.rolling(200).mean()) / (close.rolling(20).std() + 1e-8)
+
+        # 3. Downside vs upside volatility ratio
+        neg_returns = returns.clip(upper=0)
+        pos_returns = returns.clip(lower=0)
+        df['vol_skew'] = (neg_returns.rolling(20).std() / (pos_returns.rolling(20).std() + 1e-8))
+
+        # 4. Momentum persistence — is the trend accelerating or decelerating?
+        df['momentum_5'] = close.pct_change(5) / (realized_vol + 1e-8)
+        df['momentum_10'] = close.pct_change(10) / (realized_vol + 1e-8)
+
+        # 5. Volatility regime — is vol expanding (fear) or contracting (calm)?
+        vol_ma = realized_vol.rolling(50).mean()
+        df['vol_regime'] = (realized_vol - vol_ma) / (vol_ma + 1e-8)
         
         df.dropna(inplace=True)
         return df

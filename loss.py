@@ -21,7 +21,7 @@ def softmax_cross_entropy_with_logits(y_true, y_pred):
 	probs = tf.nn.softmax(logits)
 	entropy = -tf.reduce_sum(probs * tf.math.log(probs + 1e-8), axis=1)
 	
-	entropy_coeff = 0.01
+	entropy_coeff = 0.001
 	loss = tf.reduce_mean(ce_loss - entropy_coeff * entropy)
 
 	return loss

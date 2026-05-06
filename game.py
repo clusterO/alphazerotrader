@@ -15,7 +15,10 @@ class TradingGame:
         self.initial_balance = config['trading']['initial_balance']
         self.fee = config['trading']['fee']
         
-        self.feature_columns = ['log_return', 'rsi', 'atr', 'vol_10', 'vol_30', 'rel_high_low', 'vol_delta']
+        self.feature_columns = [
+            'log_return', 'rsi', 'atr', 'vol_10', 'vol_30', 'rel_high_low', 'vol_delta',
+            'trend_20', 'trend_50', 'dist_ma_200', 'vol_skew', 'momentum_5', 'momentum_10', 'vol_regime'
+        ]
         self.n_features = len(self.feature_columns)
         self.n_portfolio = 5 # pos, step_count, pnl, remaining_ratio, current_dd
         
@@ -45,7 +48,7 @@ class TradingGame:
             
             # Technical Indicators
             df['rsi'] = ta.rsi(df['close'], length=14)
-            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14) / (df['close'] + 1e-9)
             
             # Volatility
             df['vol_10'] = df['log_return'].rolling(window=10).std()
@@ -59,6 +62,31 @@ class TradingGame:
             # Volume Delta
             df['vol_delta'] = df['volume'].diff() / (df['volume'].shift(1) + 1e-9)
             
+            # --- REGIME AWARE FEATURES ---
+            close = df['close']
+            returns = df['log_return']
+            realized_vol = returns.rolling(20).std()
+
+            # 1. Trend direction
+            df['trend_20'] = close.pct_change(20) / (realized_vol + 1e-8)
+            df['trend_50'] = close.pct_change(50) / (realized_vol + 1e-8)
+
+            # 2. Distance from long-term MA
+            df['dist_ma_200'] = (close - close.rolling(200).mean()) / (close.rolling(20).std() + 1e-8)
+
+            # 3. Volatility skew
+            neg_returns = returns.clip(upper=0)
+            pos_returns = returns.clip(lower=0)
+            df['vol_skew'] = (neg_returns.rolling(20).std() / (pos_returns.rolling(20).std() + 1e-8))
+
+            # 4. Momentum
+            df['momentum_5'] = close.pct_change(5) / (realized_vol + 1e-8)
+            df['momentum_10'] = close.pct_change(10) / (realized_vol + 1e-8)
+
+            # 5. Volatility regime
+            vol_ma = realized_vol.rolling(50).mean()
+            df['vol_regime'] = (realized_vol - vol_ma) / (vol_ma + 1e-8)
+
             df.dropna(inplace=True)
             
             market_data_array = df[self.feature_columns].values.astype(np.float32)
@@ -169,9 +197,11 @@ class GameState:
     def _generate_state_tensor(self):
         start = self.current_tick - self.game_config['window_size'] + 1
         end = self.current_tick + 1
-        market_features = self.market_data[start:end]
-        # Local normalization per window
-        market_features = (market_features - np.mean(market_features, axis=0)) / (np.std(market_features, axis=0) + 1e-9)
+        market_features = self.market_data[start:end].copy()
+        
+        # Sign-preserving normalization: Scale by mean absolute value per feature in window
+        # This keeps the absolute 'level' (e.g. negative trend) relative to zero.
+        market_features = market_features / (np.mean(np.abs(market_features), axis=0) + 1e-9)
         
         p = self.portfolio
         ep_len = self.reward_tick - (self.current_tick - p['step_count'])
