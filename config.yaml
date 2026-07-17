@@ -13,16 +13,18 @@ trading:
 
 rl:
   episodes: 30
-  mcts_sims: 100 
+  use_world_model: true 
+  skip_tournament: false
+  mcts_sims: 600 
   mcts_batch_size: 16 
   mcts_max_depth: 2000 
-  warmup_iterations: 10
+  warmup_iterations: 0
   warmup_tau: 1.0
   memory_size: 100000 
   tau_decay: 0.99
   tau_min: 0.1 
-  cpuct: 1.0
-  epsilon: 0.25 
+  cpuct: 0.35
+  epsilon: 0.3 
   alpha: 0.3 
   batch_size: 256
   epochs: 1

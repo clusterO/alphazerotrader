@@ -166,7 +166,7 @@ class TradingGame:
         return [(state, actionValues)]
 
 class GameState:
-    def __init__(self, market_data, close_prices, current_tick, end_tick, portfolio, game_config, reward_tick=None):
+    def __init__(self, market_data, close_prices, current_tick, end_tick, portfolio, game_config, reward_tick=None, custom_binary=None, wm_depth=0):
         self.market_data = market_data
         self.close_prices = close_prices
         
@@ -175,12 +175,17 @@ class GameState:
         self.reward_tick = reward_tick or end_tick
         self.portfolio = portfolio
         self.game_config = game_config 
+        self.wm_depth = wm_depth
         
         self.playerTurn = 1
         self.pieces = {'1':'LONG', '0': 'FLAT', '2': 'SHORT'}
         self.allowedActions = [0, 1, 2]
         
-        self.binary = self._generate_state_tensor()
+        if custom_binary is not None:
+            self.binary = custom_binary
+        else:
+            self.binary = self._generate_state_tensor()
+            
         self.board = self.binary
         self.id = f"{self.current_tick}_{self.portfolio['position']}_{self.portfolio['balance']:.4f}"
         
@@ -200,8 +205,9 @@ class GameState:
         market_features = self.market_data[start:end].copy()
         
         # Sign-preserving normalization: Scale by mean absolute value per feature in window
-        # This keeps the absolute 'level' (e.g. negative trend) relative to zero.
-        market_features = market_features / (np.mean(np.abs(market_features), axis=0) + 1e-9)
+        # Store scale for potential denormalization in fantasy rollouts
+        self.norm_scale = np.mean(np.abs(market_features), axis=0) + 1e-9
+        market_features = market_features / self.norm_scale
         
         p = self.portfolio
         ep_len = self.reward_tick - (self.current_tick - p['step_count'])
@@ -218,6 +224,74 @@ class GameState:
         
         portfolio_features = np.tile(portfolio_row, (self.game_config['window_size'], 1))
         return np.concatenate([market_features, portfolio_features], axis=1).astype(np.float32)
+
+    def takeActionWM(self, action, world_model):
+        """
+        Modified takeAction for World Model Rollouts.
+        Uses Transition Model instead of historical data.
+        Enforces a 5-step depth cap.
+        """
+        if self.wm_depth >= 5:
+            # Expansion refused/Terminal for this branch
+            return self, 0.0, True
+
+        # 1. Predict next state tensor
+        next_binary = world_model.predict(self.binary, action)
+        
+        return self.takeActionWM_FromPrediction(action, next_binary)
+
+    def takeActionWM_FromPrediction(self, action, next_binary):
+        """
+        Analytics part of takeActionWM, allowing for batched predictions.
+        """
+        # 2. Analytic Reward Calculation
+        # log_return is at index 0. We need to denormalize it using the last known scale.
+        scale = getattr(self, 'norm_scale', np.ones(19))
+        predicted_log_return = next_binary[-1, 0] * scale[0]
+        
+        # ret = exp(log_ret) - 1
+        step_return = np.exp(predicted_log_return) - 1.0
+        
+        # Adjust based on action (Mirroring takeAction logic)
+        if action == 2: # SHORT
+            step_return = 1.0 - np.exp(predicted_log_return)
+        elif action == 0: # FLAT
+            step_return = 0.0
+            
+        # Subtract fees if position changed
+        if action != self.portfolio['position']:
+            step_return -= self.game_config['fee']
+            
+        # Update portfolio (Fantasy)
+        new_portfolio = self.portfolio.copy()
+        new_portfolio['step_count'] += 1
+        new_portfolio['balance'] *= (1 + step_return)
+        new_portfolio['position'] = action
+        
+        # Idling penalty
+        if action == 0 and self.portfolio['position'] == 0:
+            new_portfolio['balance'] *= (1 - self.game_config['idling_penalty'])
+
+        # Max Drawdown update
+        new_portfolio['peak_balance'] = max(new_portfolio['peak_balance'], new_portfolio['balance'])
+        drawdown = (new_portfolio['peak_balance'] - new_portfolio['balance']) / (new_portfolio['peak_balance'] + 1e-9)
+        new_portfolio['max_drawdown'] = max(new_portfolio['max_drawdown'], drawdown)
+        
+        # Accumulate fantasy returns
+        new_portfolio['sum_returns'] += step_return
+        new_portfolio['sum_sq_returns'] += step_return ** 2
+        new_portfolio['returns_count'] += 1
+        
+        next_tick = self.current_tick + 1
+        
+        new_state = GameState(
+            self.market_data, self.close_prices, next_tick, self.end_tick, 
+            new_portfolio, self.game_config, reward_tick=self.reward_tick,
+            custom_binary=next_binary, wm_depth=self.wm_depth + 1
+        )
+        new_state.norm_scale = scale # Persist normalization scale
+        
+        return new_state, float(step_return), new_state.isEndGame
 
     def _get_value(self):
         # Calculate terminal value if we hit lookahead boundary, DD boundary, or passed reward_tick

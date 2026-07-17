@@ -71,7 +71,7 @@ def playMatchesSingle(env, player, EPISODES, logger):
 
     return all_hourly_returns
 
-def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memory = None, goes_first = 0, force_tau = None, is_warmup = False):
+def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memory = None, goes_first = 0, force_tau = None, is_warmup = False, transition_memory = None):
 
     scores = {player1.name:0, "drawn": 0, player2.name:0}
     sp_scores = {'sp':0, "drawn": 0, 'nsp':0}
@@ -116,27 +116,17 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
             turn = turn + 1
             start_time = time.time()
             
-            if is_warmup:
-                # PHASE 7: FAST WARMUP (No MCTS, Uniform Random)
-                action = random.randint(0, env.action_size - 1)
-                # Store one-hot of the action taken so the model learns from this specific trial
-                pi = np.zeros(env.action_size)
-                pi[action] = 1.0
-                MCTS_value = 0.0
-                NN_value = 0.0
-                mcts_progress = "~"
+            # Dynamic Temperature Annealing (Phase 3.5)
+            if force_tau is not None:
+                current_tau = force_tau
             else:
-                # Dynamic Temperature Annealing (Phase 3.5)
-                if force_tau is not None:
-                    current_tau = force_tau
-                else:
-                    tau_decay = player1.cfg['rl'].get('tau_decay', 0.98)
-                    tau_min = player1.cfg['rl'].get('tau_min', 0.1)
-                    current_tau = max(tau_min, 1.0 * (tau_decay ** turn))
+                tau_decay = player1.cfg['rl'].get('tau_decay', 0.98)
+                tau_min = player1.cfg['rl'].get('tau_min', 0.1)
+                current_tau = max(tau_min, 1.0 * (tau_decay ** turn))
 
-                #### Run the MCTS algo and return an action
-                action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, current_tau)
-                mcts_progress = "!" # Agent prints '.' during sims and '!' at end
+            #### Run the MCTS algo and return an action
+            action, pi, MCTS_value, NN_value = players[state.playerTurn]['agent'].act(state, current_tau)
+            mcts_progress = "!" # Agent prints '.' during sims and '!' at end
 
             move_time = time.time() - start_time
             
@@ -159,9 +149,16 @@ def playMatches(env, player1, player2, EPISODES, logger, turns_until_tau0, memor
             logger.info('NN perceived value for %s: %f', state.pieces[str(state.playerTurn)] if str(state.playerTurn) in state.pieces else str(state.playerTurn) ,float(np.round(NN_value,2)))
             logger.info('====================')
 
+            ### World Model Phase 1: Store current state before transition
+            old_state_tensor = state.binary.copy()
+
             ### Do the action
             state, reward, done, _ = env.step(action) 
             
+            ### World Model Phase 1: Store transition
+            if transition_memory is not None:
+                transition_memory.append(old_state_tensor, action, state.binary.copy())
+
             ep_rewards[players[state.playerTurn]['agent'].name] += reward
             
             env.gameState.render(logger)

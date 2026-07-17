@@ -30,16 +30,32 @@ class User():
 		NN_value = None
 		return (action, pi, value, NN_value)
 
+class RandomAgent():
+	def __init__(self, name, state_size, action_size, cfg):
+		self.name = name
+		self.state_size = state_size
+		self.action_size = action_size
+		self.world_model = None
+		self.cfg = cfg
+
+	def act(self, state, tau):
+		action = random.choice(state.allowedActions)
+		pi = np.ones(self.action_size) / self.action_size
+		value = 0
+		NN_value = 0
+		return (action, pi, value, NN_value)
+
 
 
 class Agent():
-	def __init__(self, name, state_size, action_size, mcts_simulations, cpuct, model):
+	def __init__(self, name, state_size, action_size, mcts_simulations, cpuct, model, cfg, world_model=None):
 		self.name = name
 		self.state_size = state_size
 		self.action_size = action_size
 		self.cpuct = cpuct
 		self.MCTSsimulations = mcts_simulations
 		self.model = model
+		self.world_model = world_model
 		self.mcts = None
 
 		self.train_overall_loss = []
@@ -49,9 +65,11 @@ class Agent():
 		self.val_value_loss = []
 		self.val_policy_loss = []
 		
-		import yaml
-		with open("config.yaml", 'r') as f:
-			self.cfg = yaml.safe_load(f)
+		self.cfg = cfg
+		self.is_warmup_active = False # Set by main.py
+		
+		# PHASE 1 GATE 3: Visit Distribution Tracking
+		self.visit_stats = {'bear': [], 'bull': [], 'range': []}
 
 	def simulate(self):
 		# Legacy single simulation - replaced by act()'s batched logic
@@ -79,15 +97,10 @@ class Agent():
 
 		# PHASE 4.2: BATCHED MCTS
 		batch_size = self.cfg['rl'].get('mcts_batch_size', 8)
-		num_batches = self.MCTSsimulations // batch_size
+		# Fixed: Ensure all simulations are covered (use ceil)
+		num_batches = int(np.ceil(self.MCTSsimulations / batch_size))
 		
-		# Ensure at least one batch if sims > 0 but less than batch_size
-		if num_batches == 0 and self.MCTSsimulations > 0:
-			num_batches = 1
-
 		for b in range(num_batches):
-			if self.MCTSsimulations > 0 and b % 4 == 0: print(".", end="", flush=True)
-			
 			batch_leaves = []
 			batch_breadcrumbs = []
 			
@@ -125,6 +138,23 @@ class Agent():
 				vals = preds[0].numpy()
 				pol_logits = preds[1].numpy()
 
+				# --- DIAGNOSTIC A: Value Delta ---
+				if self.world_model is not None and np.random.random() < 0.05:
+					# Sample one leaf from the batch for comparison
+					for i, (leaf, val_dummy, done) in enumerate(batch_leaves):
+						if not done and leaf.state == state: # Compare real root if present in batch
+							root_v = vals[eval_indices.index(i)][0]
+							lg.logger_gate3.info(f"DIAG A (Root Value): {root_v:.4f}")
+							for act in [0, 1, 2]:
+								ns, rew, _ = leaf.state.takeActionWM(act, self.world_model)
+								ns_input = np.array([self.model.convertToModelInput(ns)], dtype=np.float32)
+								ns_v = self.model.predict_batch(ns_input)[0].numpy()[0][0]
+								lg.logger_gate3.info(f"  Action {act}: next_v={ns_v:.4f}, step_rew={rew:.6f}")
+							break
+				# --------------------------------
+
+				wm_expansion_requests = [] # (leaf, action, prob)
+
 				eval_idx = 0
 				for i in eval_indices:
 					leaf = batch_leaves[i][0]
@@ -140,28 +170,91 @@ class Agent():
 
 					# Expand Node (GUARDED: only if not already expanded by another sim in the batch)
 					if not leaf.edges:
-						for idx, action in enumerate(leaf.state.allowedActions):
-							newState, _, _ = leaf.state.takeAction(action)
-							if newState.id not in self.mcts.tree:
-								node = mc.Node(newState)
-								self.mcts.addNode(node)
-							else:
-								node = self.mcts.tree[newState.id]
+						# --- DIAGNOSTIC B & C: Noise and Entropy Check ---
+						if leaf.state == state: # If we are expanding the real root
+							eps = self.cfg['rl']['epsilon']
+							nu = np.random.dirichlet([self.cfg['rl']['alpha']] * self.action_size)
+							mixed = [(1-eps) * p + eps * n for p, n in zip(probs, nu)]
+							
+							# DIAG C: Prior Entropy (Detect Policy Collapse)
+							entropy = -np.sum(probs * np.log(probs + 1e-9))
+							
+							lg.logger_gate3.info(f"DIAG B (Noise): Eps={eps} | Raw Priors={['%.3f' % p for p in probs]} | Mixed={['%.3f' % m for m in mixed]}")
+							lg.logger_gate3.info(f"DIAG C (Entropy): Prior Entropy={entropy:.4f} (1.098=Uniform, 0.0=Collapsed)")
+						# --------------------------------
 
-							newEdge = mc.Edge(leaf, node, float(probs[idx]), action)
-							leaf.edges.append((action, newEdge))
+						# WORLD MODEL PHASE 1: Depth Cap
+						if self.world_model is not None and getattr(leaf.state, 'wm_depth', 0) >= 5:
+							batch_leaves[i] = (leaf, v, 1) # Force terminal status for backfill
+							eval_idx += 1
+							continue
+
+						if self.world_model is not None:
+							# Collect requests for batched inference
+							for idx, action in enumerate(leaf.state.allowedActions):
+								wm_expansion_requests.append((leaf, action, float(probs[idx])))
+						else:
+							# Sequential expansion for historical data (fast)
+							for idx, action in enumerate(leaf.state.allowedActions):
+								newState, _, _ = leaf.state.takeAction(action)
+								
+								if newState.id not in self.mcts.tree:
+									node = mc.Node(newState)
+									self.mcts.addNode(node)
+								else:
+									node = self.mcts.tree[newState.id]
+
+								newEdge = mc.Edge(leaf, node, float(probs[idx]), action)
+								leaf.edges.append((action, newEdge))
 
 					# Replace dummy value with real NN value
 					batch_leaves[i] = (leaf, v, 0)
 					eval_idx += 1
+
+				# Batched World Model Inference (The "Long-term Fix")
+				if wm_expansion_requests:
+					states_wm = [req[0].state.binary for req in wm_expansion_requests]
+					actions_wm = [req[1] for req in wm_expansion_requests]
+					
+					next_binaries = self.world_model.predict_batch(states_wm, actions_wm)
+					
+					for j, (leaf, action, prob) in enumerate(wm_expansion_requests):
+						next_binary = next_binaries[j]
+						# Use the refactored method that accepts pre-calculated next state
+						newState, _, _ = leaf.state.takeActionWM_FromPrediction(action, next_binary)
+						
+						if newState.id not in self.mcts.tree:
+							node = mc.Node(newState)
+							self.mcts.addNode(node)
+						else:
+							node = self.mcts.tree[newState.id]
+
+						newEdge = mc.Edge(leaf, node, prob, action)
+						leaf.edges.append((action, newEdge))
 			
 			# 3. Batched Backfill
 			for i in range(batch_size):
 				leaf, v, done = batch_leaves[i]
 				self.mcts.backFill(leaf, v, batch_breadcrumbs[i], remove_virtual_loss=True)
 
-		if self.MCTSsimulations > 0: print("!", end="", flush=True)
-		pi, values = self.getAV(1)
+		if self.MCTSsimulations > 0:
+			pi, values = self.getAV(1)
+			
+			# PHASE 1 GATE 3: Capture visit distribution for iteration check
+			avg_ret = np.mean(state.binary[:, 0])
+			raw_visits = np.zeros(self.action_size)
+			for action_idx, edge in self.mcts.root.edges:
+				raw_visits[action_idx] = edge.stats['N']
+			
+			if avg_ret < -0.0002: # Relaxed threshold
+				self.visit_stats['bear'].append(raw_visits)
+			elif avg_ret > 0.0002: # Relaxed threshold
+				self.visit_stats['bull'].append(raw_visits)
+			else:
+				self.visit_stats['range'].append(raw_visits)
+		else:
+			pi, values = self.getAV(1)
+
 		action, value = self.chooseAction(pi, values, tau)
 		
 		# Log terminal value prediction (Safety Check for end of episode)
@@ -211,19 +304,31 @@ class Agent():
 		edges = self.mcts.root.edges
 		pi = np.zeros(self.action_size, dtype=float)
 		values = np.zeros(self.action_size, dtype=np.float32)
+		
+		# 1. Get raw visit counts N
 		for action, edge in edges:
-			pi[action] = pow(edge.stats['N'], 1/tau) if tau > 0 else edge.stats['N']
+			pi[action] = edge.stats['N']
 			values[action] = edge.stats['Q']
+		
+		# 2. Apply Action Floor to RAW visit counts (Fix: Force exploration budget in targets)
+		is_warmup = getattr(self, 'is_warmup_active', False)
+		floor_fraction = 0.15 if is_warmup else 0.10
+		
+		total_N = np.sum(pi)
+		if total_N > 0:
+			min_visits = floor_fraction * total_N
+			pi = np.maximum(pi, min_visits)
+		
+		# 3. Apply Temperature (Tau)
+		if tau > 0:
+			pi = np.power(pi + 1e-9, 1/tau)
+			
 		pi = pi / (np.sum(pi) + 1e-9)
 		return pi, values
 
 	def replay(self, ltmemory):
-		import yaml
-		with open("config.yaml", 'r') as f:
-			cfg = yaml.safe_load(f)
-		
-		batch_size = cfg['rl']['batch_size']
-		for i in range(cfg['rl']['training_loops']):
+		batch_size = self.cfg['rl']['batch_size']
+		for i in range(self.cfg['rl']['training_loops']):
 			minibatch = random.sample(ltmemory, min(batch_size, len(ltmemory)))
 			
 			training_states = np.array([row['state'].binary for row in minibatch])
@@ -245,18 +350,25 @@ class Agent():
 			actions = np.argmax(weighted_pi, axis=1)
 			long_pct = np.sum(actions == 1) / len(actions)
 			
-			if long_pct > 0.75:
-				# Inject Dirichlet noise to force uncertainty
-				epsilon = 0.25
-				noise = np.random.dirichlet([0.3] * self.action_size, size=len(minibatch))
-				weighted_pi = (1 - epsilon) * weighted_pi + epsilon * noise
+			# Aggressive Pivot: Dynamic Floors and Noise
+			# Warmup is now 0, so we always use main phase parameters
+			floor = 0.10
+			epsilon = 0.4
+			
+			# Apply action floor
+			weighted_pi = np.maximum(weighted_pi, floor)
+			weighted_pi = weighted_pi / (np.sum(weighted_pi, axis=1, keepdims=True) + 1e-9)
+
+			# Apply Dirichlet noise
+			noise = np.random.dirichlet([0.3] * self.action_size, size=len(minibatch))
+			weighted_pi = (1 - epsilon) * weighted_pi + epsilon * noise
 
 			training_targets = {
 				'value_head': z_values, 
 				'policy_head': weighted_pi
 			} 
 			
-			self.model.fit(training_states, training_targets, epochs=cfg['rl']['epochs'], verbose=0, validation_split=0, batch_size=batch_size)
+			self.model.fit(training_states, training_targets, epochs=self.cfg['rl']['epochs'], verbose=0, validation_split=0, batch_size=batch_size)
 
 	def buildMCTS(self, state):
 		if self.mcts is not None:

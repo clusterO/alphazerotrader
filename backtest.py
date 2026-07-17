@@ -39,11 +39,7 @@ def backtest(model_v=None, data_path='data/val.csv'):
     # We need to build the object first to get the correct shapes
     nn = Residual_CNN(cfg['rl']['learning_rate'], cfg['rl']['learning_rate'], env.input_shape, env.action_size)
     m_path = os.path.join(model_dir, model_file)
-    m_tmp = tf.keras.models.load_model(m_path, custom_objects={
-        'softmax_cross_entropy_with_logits': softmax_cross_entropy_with_logits,
-        'TransformerBlock': TransformerBlock
-    })
-    nn.model.set_weights(m_tmp.get_weights())
+    nn.model.load_weights(m_path)
     
     # PHASE 6: AUTOMATIC FAIR MODE OVERRIDE
     # We force mcts_sims to 0 for backtesting to ensure the agent cannot "see" 
@@ -55,7 +51,7 @@ def backtest(model_v=None, data_path='data/val.csv'):
         print("-"*60 + "\n")
         cfg['rl']['mcts_sims'] = 0
     
-    agent = Agent('backtest_agent', env.state_size, env.action_size, cfg['rl']['mcts_sims'], cfg['rl']['cpuct'], nn)
+    agent = Agent('backtest_agent', env.state_size, env.action_size, cfg['rl']['mcts_sims'], cfg['rl']['cpuct'], nn, cfg)
     
     # 5. Run Walk-through
     # We set end_tick to len - 1 to allow the agent to act on 19938 and see price 19939.

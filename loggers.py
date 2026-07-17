@@ -28,4 +28,7 @@ logger_memory.disabled = LOGGER_DISABLED['memory']
 
 logger_model = setup_logger('logger_model', run_folder + 'logs/logger_model.log')
 logger_model.disabled = LOGGER_DISABLED['model']
+
+logger_gate3 = setup_logger('logger_gate3', run_folder + 'logs/gate3_diagnostics.log')
+logger_gate3.disabled = False
  

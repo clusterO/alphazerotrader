@@ -137,5 +137,47 @@ class Residual_CNN(Gen_Model):
                       optimizer=optimizer, loss_weights={'value_head': 0.5, 'policy_head': 0.5})
         return model
 
+    def set_policy_head_trainable(self, trainable):
+        """
+        Freezes or unfreezes the policy head.
+        When frozen, only the value head and backbone are trained.
+        """
+        for layer in self.model.layers:
+            if 'policy_head' in layer.name:
+                layer.trainable = trainable
+        
+        # Recompile to apply changes and adjust loss weights
+        vw = 1.0 if not trainable else 0.5
+        pw = 0.0 if not trainable else 0.5
+        
+        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
+        self.model.compile(loss={'value_head': 'mse', 'policy_head': softmax_cross_entropy_with_logits},
+                          optimizer=optimizer, loss_weights={'value_head': vw, 'policy_head': pw})
+        
+        status = "FROZEN" if not trainable else "UNFROZEN"
+        print(f"Policy Head is now: {status} (Loss Weights: V={vw}, P={pw})")
+
+    def reset_policy_head(self):
+        """
+        Surgically resets only the policy head weights to random initialization.
+        Overcomes prior inertia while preserving value head calibration.
+        """
+        print("SURGICAL RESET: Re-initializing Policy Head weights...")
+        initializer = tf.keras.initializers.GlorotUniform()
+        for layer in self.model.layers:
+            if 'policy_head' in layer.name:
+                if hasattr(layer, 'kernel_initializer'):
+                    weights = layer.get_weights()
+                    # Reset kernel and bias if present
+                    new_weights = [initializer(w.shape) for w in weights]
+                    layer.set_weights(new_weights)
+                elif isinstance(layer, layers.Dense):
+                    # Manual reset for Dense layers if initializer attribute is not exposed
+                    weights = layer.get_weights()
+                    new_kernel = initializer(shape=weights[0].shape)
+                    new_bias = np.zeros(weights[1].shape)
+                    layer.set_weights([new_kernel, new_bias])
+        print("Policy Head Reset Complete.")
+
     def convertToModelInput(self, state):
         return state.binary

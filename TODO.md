@@ -1,7 +1,9 @@
-#### Warm Up
-The only remaining improvement to the warmup is to add a termination condition rather than a fixed 10-iteration count. 
-A more robust version would end warmup when z-std exceeds a threshold (e.g., 0.35) rather than after exactly 10 iterations 
-— some regimes may need more or less warmup to achieve sufficient memory diversity. But for now, fixed 10 iterations is working fine.
+## TODO
+
+- Improve CC layer with risk management, money management and whatnot
+- Mechanistic Interpretability
+
+## IDEAS
 
 #### Feature Engineering — 10 New Features
 Add these in one batch. Keep the existing tensor structure but expand Channel 1:
@@ -23,6 +25,9 @@ vwap_dev = (close - vwap) / vwap # deviation from VWAP
 log_return = np.log(close / close.shift(1))
 roc_10 = (close - close.shift(10)) / close.shift(10)
 Normalize each feature with rolling z-score (mean and std over the window) rather than global normalization — this handles non-stationarity better.
+
+**Channel 2**
+Another upper timeframe
 
 #### Continuous Action Space — Defer with a Gate
 Don't implement now. Implement a gate: once your discrete agent achieves annualized Sharpe > 1.0 consistently on held-out data for 4+ consecutive evaluation rounds, 
@@ -82,6 +87,3 @@ Never stop training. As new market data arrives, continuously fine-tune the netw
 — but with mechanisms to prevent forgetting old knowledge (elastic weight consolidation, experience replay with old data). 
 The agent stays current without catastrophic forgetting.
 
----
-
-Trading reels FB and IG
