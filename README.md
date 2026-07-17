@@ -1,104 +1,133 @@
-# AlphaZero Trader v3
+# AlphaZero Trader — Track 2: Research (World Model Fix)
 
-An autonomous, risk-aware trading engine utilizing the AlphaZero reinforcement learning framework. The system treats financial markets as a single-player "market game" and optimizes for risk-adjusted returns (Sharpe Ratio) using a Transformer-based architecture.
-
-## Current Project State: AlphaZero Trader v3
-This version (v3) is a major overhaul that addresses the critical flaws of naive AlphaZero-to-Trading transitions:
-- **No-Peek Inference**: MCTS is used as an "Oracle" during training but is disabled during evaluation/live trading to prevent lookahead bias.
-- **Transformer Backbone**: Replaced the ResNet CNN with a **Transformer Encoder** to better capture long-range temporal dependencies in price action.
-- **Risk-Adjusted Learning**: The system optimizes for **Sharpe Ratio** instead of raw profit, preferring stable growth over volatile gambles.
-- **Realistic Friction**: Implements **Transaction Costs** (default 5 bps) and holding penalties to prevent overtrading.
-- **Rich State Representation**: Input features include RSI, ATR (Volatility), Rolling Volatility, and Volume Delta, alongside a detailed Portfolio State (Position Age, PnL, Episode Progress).
+> **Branch:** `research/track-2-world-model-fix`
+> **Status:** 🔬 Research — World model preserved, exploitation defense in progress
 
 ---
 
-## Data Management
+## Project Split: Two Tracks, Two Futures
 
-The system uses a unified `data_manager.py` to handle all data requirements. 
+| Branch | Purpose | World Model | Status |
+|---|---|---|---|
+| **`deploy/track-1-long-flat`** | Production deployable system | ❌ Removed | 🟢 Active |
+| **`research/track-2-world-model-fix`** ← *you are here* | Architecture research & exploitation fixes | ✅ Active | 🔬 Research |
 
-### 1. Fetching Training Data
-To prepare a new dataset for training (automatically creates 80/10/10 splits):
+Switch to the deploy branch:
 ```bash
-./venv/bin/python3 data_manager.py --symbol BTC/USDT --timeframe 5m --train --limit 15000
+git checkout deploy/track-1-long-flat
 ```
-
-### 2. Fetching Backtest Data
-To fetch data for a specific regime or test case:
-```bash
-./venv/bin/python3 data_manager.py --symbol BTC/USDT --timeframe 1h --limit 3000 --description "bear_market"
-```
-
-### 3. Switching Instruments/Timeframes
-Everything is driven by `config.yaml`. To switch assets, update the `data_path`, `symbol`, and `timeframe` fields. The system automatically separates models and memories by these identifiers.
 
 ---
 
-## Quick Start Guide
+## Context: Why This Branch Exists
 
-### 1. Installation
-We recommend using a virtual environment:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install ccxt pandas pandas_ta PyYAML tensorflow keras matplotlib
+The World Model (Conv1D+LSTM transition predictor) was introduced to allow MCTS to plan beyond historical data. Architecturally it was sound — the gates all passed, the value head separated correctly, and MCTS divergence appeared as expected.
+
+The failure was **exploitation**. MCTS with 600 simulations optimizing through an imperfect world model found hallucinated action sequences producing 30–50% episode returns. The policy fully absorbed those patterns.
+
+Fair Mode backtest confirmed: v18 and v19 fail on all four regimes. The agent learned to play the world model's fantasy market, not the real one.
+
+This branch preserves the full world model architecture and contains the roadmap for fixing the exploitation problem. It is a **research sandbox** — do not retrain production models here.
+
+---
+
+## Exploitation Problem: Root Cause Analysis
+
+### Why MCTS Exploits a World Model
+```
+Real market trajectory:     price moves ±0.3% per tick on average
+WM prediction error:        ±0.8% residual per tick (compounding)
+MCTS 20-step rollout error: potentially ±16% accumulated drift
+
+→ MCTS finds "fantasy paths" where WM error consistently favors Long
+→ Policy gradient absorbs those paths as real signal
+→ Model trained on fantasy converges to garbage on real data
 ```
 
-### 2. Run Training
-Start the autonomous Self-Play and Retraining loop:
+### Three Categories of Fixes
+
+#### Category A — Limit MCTS Exploitation of WM Errors
+These are surgical: they don't change the architecture, just constrain how MCTS uses the WM.
+
+- [ ] **Rollout Return Ceiling**: Cap the maximum return any WM rollout can report to `+/- 2 * historical_sigma`. Any path exceeding this is fantasy; clip it. *(Estimated impact: HIGH)*
+- [ ] **WM Depth Limit**: Reduce WM rollout depth from 5 to 2. Errors compound geometrically. *(Estimated impact: MEDIUM)*
+- [ ] **WM Confidence Score**: Add a per-step prediction uncertainty estimate (MC Dropout or ensemble variance). Discount rollout value by accumulated uncertainty. *(Estimated impact: HIGH, complex)*
+
+#### Category B — Training Signal Correction
+These address how the policy learns from MCTS outputs on WM data.
+
+- [ ] **KL Divergence Regularization**: Add a KL term between the policy's distribution on WM-rollout states and historical-data states. Forces WM-trained policy to stay close to what real data teaches. *(Estimated impact: HIGH)*
+- [ ] **Value Head Reality Anchoring**: During training, blend WM-rollout values (from MCTS) with direct NN values on real historical next states. Prevents value head from calibrating purely on fantasy returns. *(Estimated impact: HIGH)*
+- [ ] **WM-only vs History-only Memory Split**: Keep two replay buffers — one for WM-augmented episodes, one for pure historical. Train with a 25/75 blend. *(Estimated impact: MEDIUM)*
+
+#### Category C — World Model Architecture Improvements
+These make the WM more accurate and less exploitable.
+
+- [ ] **Residual WM (predict delta, not full state)**: Predict `Δstate` not next_state. Errors in delta space compound slower. *(Estimated impact: MEDIUM)*
+- [ ] **Ensemble WM (3 models, take pessimistic value)**: Use 3 WM models trained on different data splits. Use the *minimum* predicted value across ensemble for MCTS expansion. *(Estimated impact: HIGH, expensive)*
+- [ ] **WM Error Feedback Loop**: After each real episode, compute WM prediction error per step and use it to down-weight WM rollout confidence. Continuously calibrating uncertainty. *(Estimated impact: HIGH)*
+
+---
+
+## Recommended First Experiment: Rollout Return Ceiling
+
+The lowest-risk, highest-expected-impact fix. Implement in `agent.py` during WM expansion:
+
+```python
+# In the batched WM backfill loop (agent.py):
+WM_RETURN_CEILING = 2.0 * historical_sigma  # e.g. 0.06 for 1h BTC
+v = np.clip(v, -WM_RETURN_CEILING, WM_RETURN_CEILING)
+```
+
+**Expected result**: MCTS can no longer find 30–50% fantasy paths. The maximum reward it can assign to any WM rollout is bounded to realistic historical volatility. Policy should stop absorbing fantasy patterns.
+
+**Gate**: Run Fair Mode backtest on bear_2022.csv. If drawdown is reduced and the agent doesn't immediately hit the 15% stop-out, Category A fixes are working.
+
+---
+
+## Experiment Log
+
+| Date | Experiment | Hypothesis | Result |
+|---|---|---|---|
+| 2026-07-17 | Fair Mode backtest v18 & v19 | World model caused exploitation | ✅ CONFIRMED — total failure all regimes |
+| — | Rollout ceiling (Category A) | Cap fantasy returns | — |
+| — | KL regularization (Category B) | Anchor policy to real data | — |
+| — | Ensemble WM (Category C) | Pessimistic rollouts | — |
+
+---
+
+## Files Changed Relative to Main
+
+This branch is identical to `main` (the world model snapshot). No changes yet — experiments go here.
+
+Key files for WM research:
+| File | Role |
+|---|---|
+| `world_model.py` | Conv1D+LSTM transition predictor |
+| `transition_memory.py` | Replay buffer for (s, a, s') transitions |
+| `agent.py` | WM integration in batched MCTS expansion |
+| `main.py` | WM retraining loop (every 2 iterations) |
+| `game.py` | `takeActionWM` and `takeActionWM_FromPrediction` |
+| `RESEARCH.md` | *(this document, for detailed notes)* |
+
+---
+
+## Running Experiments
+
 ```bash
-export PYTHONPATH=$PYTHONPATH:.
+# 1. Make your change (e.g. add rollout ceiling to agent.py)
+# 2. Retrain for N iterations (start small, 5-10 iterations)
 python3 main.py
+
+# 3. Run Fair Mode backtest on all 4 regimes
+python3 backtest.py --model run/models/BTC_USDT_1h_v0001.keras \
+    --data data/backtest/bear_2022.csv
+
+# 4. Log results in the Experiment Log above
 ```
 
 ---
 
-## How it Works: The Training Cycle
+## Contact
 
-1.  **Self-Play (Data Collection)**:
-    - The agent plays through random slices of training data.
-    - It uses **MCTS** to explore future price movements and "labels" the best actions.
-    - These experiences are stored in a **Memory Buffer**.
-2.  **Retraining (The Learning)**:
-    - Once the buffer hits a threshold, the **Transformer** retrains its weights.
-    - It learns to predict the optimal MCTS moves using only *past* data.
-3.  **Tournament (The Evolution)**:
-    - The new model plays against the current "Best" model on the **unseen validation data**.
-    - If the new model achieves a significantly higher **Sharpe Ratio**, it is promoted to the new "Best Player."
-
----
-
-## Configuration (`config.yaml`)
-You can tune the engine without touching code:
-- `trading`: Set symbols, timeframes, data paths, fees, and window size.
-- `rl`: Control MCTS simulations, memory size, and learning rates.
-- `model`: Adjust Transformer depth, number of heads, and dropout.
-- `evaluation`: Set the tournament threshold and metrics.
-
----
-
-## Training Configuration: 1h vs 5m Granularity
-
-When switching between timeframes, specific parameters must be adjusted to account for the difference in price move volatility and frequency of signals.
-
-### 1h Granularity (Default)
-- **Transaction Fee**: 0.05% (5 bps). Hourly moves are large enough to absorb this cost.
-- **Idling Penalty**: 0.0001 (1 bp per hour). Forces the agent to find trades within daily cycles.
-- **Sharpe Annualization**: Traditionally uses $\sqrt{252 \times 24} \approx 77.7$.
-- **Reward Scaling**: `tanh(sharpe / 2.0)` is effective as hourly Sharpe values are relatively stable.
-
-### 5m Granularity
-- **Transaction Fee**: 0.00015 (1.5 bps). 5m moves are much smaller; higher fees will cause the agent to learn that all trading is negative.
-- **Idling Penalty**: 0.00001 (0.1 bp per 5m candle). High frequency "do nothing" penalties will drain the account faster than the agent can learn.
-- **Sharpe Annualization**: For tournaments, **Raw Episode Sharpe** (no annualization factor) is preferred for a cleaner ranking signal. 
-- **Reward Scaling**: `tanh(raw_sharpe * 3.0)`. Removing the large annualization factor from the reward loop requires increasing the multiplier to maintain gradient signal without saturating at -1.0 or 1.0.
-- **Episode Length**: [150, 400] candles (approx 12-33 hours). Ensures the agent sees multiple micro-trends within a single episode.
-
----
-
-## Project Structure
-- **`data_manager.py`**: Centralized data fetcher and processor.
-- **`game.py`**: The "Market Game" environment and logic.
-- **`model.py`**: The Transformer Encoder architecture.
-- **`MCTS.py`**: Monte Carlo Tree Search (The Oracle).
-- **`agent.py`**: Bridge between the Transformer and MCTS.
-- **`run/`**: Output directory for models (`.keras`), logs, and memory snapshots.
+See `deploy/track-1-long-flat` branch for the production system.
