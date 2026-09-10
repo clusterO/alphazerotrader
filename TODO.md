@@ -1,6 +1,8 @@
-## TODO
+## TODO (Research Track — `research/track-2-world-model-fix`)
 
-- Improve CC layer with risk management, money management and whatnot
+> This branch is the **public research track**. The private `deploy/track-1-long-flat` C&C layer is intentionally excluded here.
+
+- [ ] **Exploitation defenses** — see `README.md` Roadmap (Categories A/B/C); first fix: rollout return ceiling
 - Mechanistic Interpretability
 
 ## IDEAS
